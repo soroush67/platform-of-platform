@@ -220,3 +220,20 @@ into the same aggregates.
    (`read-only` / `plan-only` / `full-access` presets). Coarser is
    faster to ship; fine-grained is what a security-conscious enterprise
    buyer will actually ask for.
+
+**Resolved (operator approved proceeding with these defaults, both
+easy to revisit before any code exists)**:
+
+1. **Slugs are renamable, old slug 404s immediately, no redirect** -
+   matches GitHub/GitLab/Terraform Cloud; avoids building and
+   maintaining an alias-resolution table for a case (rename) that's rare
+   relative to normal reads.
+2. **Fine-grained, RBAC-Permission-level API key scopes** - the
+   Permission enum from Stage 3 §4 already exists for RBAC, so scopes
+   are literally "a subset of that same enum," not new modeling work.
+   Coarse presets (`read-only`, `plan-only`) get layered on top later as
+   a *Web UI convenience* (a preset button that just pre-selects a
+   canned permission set) - choosing fine-grained now doesn't block
+   adding that convenience later, whereas shipping only coarse presets
+   now and needing fine-grained later would mean redesigning the APIKey
+   scope storage shape under existing customer keys.
