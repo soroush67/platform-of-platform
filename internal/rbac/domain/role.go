@@ -18,6 +18,15 @@ const (
 	PermissionOrganizationManage Permission = "organization:manage"
 	PermissionWorkspaceRead      Permission = "workspace:read"
 	PermissionWorkspaceManage    Permission = "workspace:manage"
+	// PermissionWorkspaceApply is named directly in
+	// docs/architecture/03-domain-model.md §4's own example
+	// ("workspace:apply, secret:read, policy_set:manage") - kept
+	// distinct from workspace:manage (creating/configuring a Workspace)
+	// because triggering or canceling a Run against real infrastructure
+	// is a materially different, higher-consequence action than the
+	// resource-management one, even though both currently sit at the
+	// same Write-role tier.
+	PermissionWorkspaceApply Permission = "workspace:apply"
 )
 
 // Built-in role names (docs/architecture/03-domain-model.md §4's
@@ -44,9 +53,9 @@ const (
 // deliberately not opened up to Write - see create_project.go and
 // create_environment.go's own comments).
 var BuiltinRoles = map[string][]Permission{
-	RoleOwner: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage},
-	RoleAdmin: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage},
-	RoleWrite: {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionWorkspaceManage},
+	RoleOwner: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply},
+	RoleAdmin: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply},
+	RoleWrite: {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply},
 	RoleRead:  {PermissionOrganizationRead, PermissionWorkspaceRead},
 }
 

@@ -23,6 +23,9 @@ import (
 
 	"platform-of-platform/internal/platform/config"
 	"platform-of-platform/internal/platform/httpserver"
+	executionhttp "platform-of-platform/internal/execution/adapters/http"
+	executionpg "platform-of-platform/internal/execution/adapters/postgres"
+	executionapp "platform-of-platform/internal/execution/application"
 	identityhttp "platform-of-platform/internal/identity/adapters/http"
 	identitypg "platform-of-platform/internal/identity/adapters/postgres"
 	identityapp "platform-of-platform/internal/identity/application"
@@ -86,6 +89,12 @@ func main() {
 	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo)
 	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo)
 
+	runRepo := executionpg.NewRunRepository(pool)
+	triggerRunService := executionapp.NewTriggerRunService(runRepo, workspaceRepo, workspaceRepo, roleBindingRepo)
+	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo)
+	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
+	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
+
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
@@ -106,6 +115,10 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.CreateWorkspaceHandler(createWorkspaceService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.ListWorkspacesHandler(listWorkspacesService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.GetWorkspaceHandler(getWorkspaceService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.TriggerRunHandler(triggerRunService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.ListRunsHandler(listRunsService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.GetRunHandler(getRunService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}/cancel", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.CancelRunHandler(cancelRunService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
