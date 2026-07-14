@@ -20,6 +20,31 @@ func NewEnvironmentRepository(pool *pgxpool.Pool) *EnvironmentRepository {
 	return &EnvironmentRepository{pool: pool}
 }
 
+// Exists is the Environment side of the Variables context's own
+// ScopeChecker port - same reasoning as WorkspaceRepository.Exists.
+func (r *EnvironmentRepository) Exists(ctx context.Context, organizationID, environmentID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM environments WHERE organization_id = $1 AND id = $2)`,
+		organizationID, environmentID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, tx.Commit(ctx)
+}
+
 func (r *EnvironmentRepository) Create(ctx context.Context, env *domain.Environment) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

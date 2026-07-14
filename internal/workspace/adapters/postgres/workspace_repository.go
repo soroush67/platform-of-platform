@@ -98,6 +98,65 @@ func (r *WorkspaceRepository) WorkspaceExists(ctx context.Context, organizationI
 	return exists, tx.Commit(ctx)
 }
 
+// Exists and GetScope are lighter-weight cross-context checks than
+// WorkspaceExists/GetByID above - the Variables context (which declares
+// its own ScopeChecker/WorkspaceScopeReader ports) only ever has a
+// workspace id on hand, not also its parent project id the way
+// Execution's URL structure guarantees, so it needs a check/read that
+// doesn't require one.
+func (r *WorkspaceRepository) Exists(ctx context.Context, organizationID, workspaceID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM workspaces WHERE organization_id = $1 AND id = $2)`,
+		organizationID, workspaceID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, tx.Commit(ctx)
+}
+
+// GetScope returns just the two ancestor ids the Variables cascade
+// needs to walk (docs/architecture/03-domain-model.md §7) - projectID
+// and, if any, environmentID - never the full domain.Workspace, per the
+// "never leak a domain type across the context boundary" rule already
+// applied to every other cross-context port in this codebase.
+func (r *WorkspaceRepository) GetScope(ctx context.Context, organizationID, workspaceID string) (projectID string, environmentID *string, err error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return "", nil, err
+	}
+
+	err = tx.QueryRow(ctx,
+		`SELECT project_id, environment_id FROM workspaces WHERE organization_id = $1 AND id = $2`,
+		organizationID, workspaceID,
+	).Scan(&projectID, &environmentID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", nil, domain.ErrWorkspaceNotFound
+		}
+		return "", nil, err
+	}
+
+	return projectID, environmentID, tx.Commit(ctx)
+}
+
 // TryLock is the real implementation of docs/architecture/05-database.md
 // §2's "the workspace lock's enforcement... is a Postgres SELECT ... FOR
 // UPDATE inside the transaction that transitions a Run into a running

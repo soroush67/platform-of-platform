@@ -33,6 +33,9 @@ import (
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
 	tenancyapp "platform-of-platform/internal/tenancy/application"
+	variableshttp "platform-of-platform/internal/variables/adapters/http"
+	variablespg "platform-of-platform/internal/variables/adapters/postgres"
+	variablesapp "platform-of-platform/internal/variables/application"
 	workspacehttp "platform-of-platform/internal/workspace/adapters/http"
 	workspacepg "platform-of-platform/internal/workspace/adapters/postgres"
 	workspaceapp "platform-of-platform/internal/workspace/application"
@@ -95,6 +98,11 @@ func main() {
 	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
 
+	variableRepo := variablespg.NewVariableRepository(pool)
+	createVariableService := variablesapp.NewCreateVariableService(variableRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo)
+	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
+	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
+
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
@@ -119,6 +127,9 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.ListRunsHandler(listRunsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.GetRunHandler(getRunService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}/cancel", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.CancelRunHandler(cancelRunService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.CreateVariableHandler(createVariableService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ListVariablesHandler(listVariablesService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/variables/resolve", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ResolveVariableHandler(resolveVariableService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
