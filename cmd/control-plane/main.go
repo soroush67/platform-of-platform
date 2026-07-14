@@ -22,6 +22,9 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	"platform-of-platform/internal/platform/config"
+	"platform-of-platform/internal/tenancy/adapters/postgres"
+	tenancyapp "platform-of-platform/internal/tenancy/application"
+	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 )
 
 func main() {
@@ -45,8 +48,14 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Manual wiring, in one place - docs/architecture/18-backend-structure.md §5's
+	// "no DI framework" decision: every dependency is greppable from here.
+	orgRepo := postgres.NewOrganizationRepository(pool)
+	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
+	mux.HandleFunc("POST /api/v1/orgs", tenancyhttp.CreateOrganizationHandler(createOrgService))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
