@@ -37,6 +37,7 @@ import (
 	identityapp "platform-of-platform/internal/identity/application"
 	"platform-of-platform/internal/platform/config"
 	"platform-of-platform/internal/platform/httpserver"
+	"platform-of-platform/internal/platform/idempotency"
 	"platform-of-platform/internal/platform/outbox"
 	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
@@ -167,7 +168,8 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.CreateWorkspaceHandler(createWorkspaceService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.ListWorkspacesHandler(listWorkspacesService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.GetWorkspaceHandler(getWorkspaceService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.TriggerRunHandler(triggerRunService)))
+	idempotencyStore := idempotency.NewStore(pool)
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, idempotency.Middleware(idempotencyStore, executionhttp.TriggerRunHandler(triggerRunService))))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.ListRunsHandler(listRunsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.GetRunHandler(getRunService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}/cancel", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.CancelRunHandler(cancelRunService)))
