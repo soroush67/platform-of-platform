@@ -66,9 +66,13 @@ func main() {
 
 	orgRepo := tenancypg.NewOrganizationRepository(pool)
 	membershipRepo := tenancypg.NewMembershipRepository(pool)
+	projectRepo := tenancypg.NewProjectRepository(pool)
 	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo)
 	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo, membershipRepo)
 	addMemberService := tenancyapp.NewAddMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
+	createProjectService := tenancyapp.NewCreateProjectService(projectRepo, roleBindingRepo)
+	listProjectsService := tenancyapp.NewListProjectsService(projectRepo, membershipRepo)
+	getProjectService := tenancyapp.NewGetProjectService(projectRepo, membershipRepo)
 
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
@@ -81,6 +85,9 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateOrganizationHandler(createOrgService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetOrganizationHandler(getOrgService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.AddMemberHandler(addMemberService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateProjectHandler(createProjectService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ListProjectsHandler(listProjectsService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetProjectHandler(getProjectService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,

@@ -47,3 +47,15 @@ type RoleAssigner interface {
 type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
+
+// ProjectRepository - same shape/reasoning as OrganizationRepository.
+type ProjectRepository interface {
+	Create(ctx context.Context, project *domain.Project) error
+	// GetByID returns ErrProjectNotFound if no row is visible - RLS scopes
+	// this to organizationID first (see the postgres adapter), so a
+	// project id from a *different* org than the one in the URL is
+	// indistinguishable from a nonexistent id, same "don't reveal
+	// existence" posture as everywhere else in this codebase.
+	GetByID(ctx context.Context, organizationID, id string) (*domain.Project, error)
+	ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Project, error)
+}
