@@ -30,6 +30,9 @@ import (
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
 	tenancyapp "platform-of-platform/internal/tenancy/application"
+	workspacehttp "platform-of-platform/internal/workspace/adapters/http"
+	workspacepg "platform-of-platform/internal/workspace/adapters/postgres"
+	workspaceapp "platform-of-platform/internal/workspace/application"
 )
 
 func main() {
@@ -74,6 +77,15 @@ func main() {
 	listProjectsService := tenancyapp.NewListProjectsService(projectRepo, membershipRepo)
 	getProjectService := tenancyapp.NewGetProjectService(projectRepo, membershipRepo)
 
+	environmentRepo := workspacepg.NewEnvironmentRepository(pool)
+	workspaceRepo := workspacepg.NewWorkspaceRepository(pool)
+	createEnvironmentService := workspaceapp.NewCreateEnvironmentService(environmentRepo, roleBindingRepo, projectRepo)
+	listEnvironmentsService := workspaceapp.NewListEnvironmentsService(environmentRepo, membershipRepo, projectRepo)
+	getEnvironmentService := workspaceapp.NewGetEnvironmentService(environmentRepo, membershipRepo, projectRepo)
+	createWorkspaceService := workspaceapp.NewCreateWorkspaceService(workspaceRepo, roleBindingRepo, projectRepo)
+	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo)
+	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo)
+
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
@@ -88,6 +100,12 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateProjectHandler(createProjectService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ListProjectsHandler(listProjectsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetProjectHandler(getProjectService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/environments", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.CreateEnvironmentHandler(createEnvironmentService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/environments", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.ListEnvironmentsHandler(listEnvironmentsService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/environments/{envID}", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.GetEnvironmentHandler(getEnvironmentService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.CreateWorkspaceHandler(createWorkspaceService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.ListWorkspacesHandler(listWorkspacesService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.GetWorkspaceHandler(getWorkspaceService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,

@@ -75,6 +75,36 @@ func (r *ProjectRepository) GetByID(ctx context.Context, organizationID, id stri
 	return &p, tx.Commit(ctx)
 }
 
+// ProjectExists is Tenancy's side of the cross-context ProjectChecker
+// port the Workspace context declares itself
+// (internal/workspace/application/ports.go) - returns a bool, not
+// *domain.Project, deliberately: Workspace must never import
+// tenancy/domain (docs/architecture/18-backend-structure.md §3), and a
+// bool is all a "does this project genuinely belong to this org" check
+// needs to hand back across the context boundary.
+func (r *ProjectRepository) ProjectExists(ctx context.Context, organizationID, projectID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM projects WHERE organization_id = $1 AND id = $2)`,
+		organizationID, projectID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, tx.Commit(ctx)
+}
+
 func (r *ProjectRepository) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Project, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
