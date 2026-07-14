@@ -54,6 +54,15 @@ type Config struct {
 	TLSCACert     string
 	TLSServerCert string
 	TLSServerKey  string
+	// OrgPurgeAfter/OrgPurgeReaperInterval configure the Purge Reaper
+	// (internal/tenancy/application/purge_reaper.go) - how long an
+	// Organization may sit `archived` before it's hard-deleted, and how
+	// often the sweep runs. Default matches docs/architecture/13-module-
+	// identity-rbac-tenancy.md §1's own "30 days out"; real verification
+	// needs a much smaller value, set via env, same posture as
+	// RunStaleAfter/RunReaperInterval above.
+	OrgPurgeAfter          time.Duration
+	OrgPurgeReaperInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -67,19 +76,29 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("config: RUN_REAPER_INTERVAL: %w", err)
 	}
+	orgPurgeAfter, err := time.ParseDuration(getenvDefault("ORG_PURGE_AFTER", "720h"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: ORG_PURGE_AFTER: %w", err)
+	}
+	orgPurgeReaperInterval, err := time.ParseDuration(getenvDefault("ORG_PURGE_REAPER_INTERVAL", "1h"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: ORG_PURGE_REAPER_INTERVAL: %w", err)
+	}
 
 	cfg := Config{
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		AppDatabaseURL:    os.Getenv("APP_DATABASE_URL"),
-		HTTPAddr:          getenvDefault("HTTP_ADDR", ":8443"),
-		GRPCAddr:          getenvDefault("GRPC_ADDR", ":9000"),
-		InitialAdminEmail: os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
-		JWTSigningKey:     []byte(jwtKey),
-		RunStaleAfter:     staleAfter,
-		RunReaperInterval: reaperInterval,
-		TLSCACert:         os.Getenv("TLS_CA_CERT"),
-		TLSServerCert:     os.Getenv("TLS_SERVER_CERT"),
-		TLSServerKey:      os.Getenv("TLS_SERVER_KEY"),
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
+		AppDatabaseURL:         os.Getenv("APP_DATABASE_URL"),
+		HTTPAddr:               getenvDefault("HTTP_ADDR", ":8443"),
+		GRPCAddr:               getenvDefault("GRPC_ADDR", ":9000"),
+		InitialAdminEmail:      os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
+		JWTSigningKey:          []byte(jwtKey),
+		RunStaleAfter:          staleAfter,
+		RunReaperInterval:      reaperInterval,
+		TLSCACert:              os.Getenv("TLS_CA_CERT"),
+		TLSServerCert:          os.Getenv("TLS_SERVER_CERT"),
+		TLSServerKey:           os.Getenv("TLS_SERVER_KEY"),
+		OrgPurgeAfter:          orgPurgeAfter,
+		OrgPurgeReaperInterval: orgPurgeReaperInterval,
 	}
 
 	if cfg.DatabaseURL == "" {

@@ -17,12 +17,21 @@ type VariableRepository interface {
 
 // ProjectChecker / EnvironmentChecker / WorkspaceChecker - this
 // context's own ports into Tenancy/Workspace for "does this scope_id
-// genuinely resolve to a real resource in this org" (there's no
-// OrganizationChecker: scope_id for scope_type=organization is checked
-// by simple string comparison against organizationID in the service
-// itself, no cross-context call needed for that one case).
+// genuinely resolve to a real resource in this org" (scope_id for
+// scope_type=organization is checked by simple string comparison
+// against organizationID in the service itself, no cross-context call
+// needed for that one case).
 type ProjectChecker interface {
 	ProjectExists(ctx context.Context, organizationID, projectID string) (bool, error)
+}
+
+// OrganizationChecker - a separate concern from the scope-existence
+// checkers above: "is this Organization archived" (docs/architecture/
+// 13-module-identity-rbac-tenancy.md §1). CreateVariableService checks
+// this before creating a new Variable, the same enforcement point
+// tenancy.CreateProjectService/workspace.CreateWorkspaceService apply.
+type OrganizationChecker interface {
+	IsArchived(ctx context.Context, organizationID string) (bool, error)
 }
 
 type EnvironmentChecker interface {

@@ -53,6 +53,10 @@ func writeNotFoundOrForbidden(w http.ResponseWriter, err error, notFoundTitle st
 		httpserver.WriteProblem(w, http.StatusNotFound, notFoundTitle, "")
 		return true
 	}
+	if errors.Is(err, domain.ErrOrganizationArchived) {
+		httpserver.WriteProblem(w, http.StatusConflict, "organization is archived", "")
+		return true
+	}
 	return false
 }
 

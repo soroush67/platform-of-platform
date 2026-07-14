@@ -32,6 +32,13 @@ var (
 	// event later, standing in for a dedicated Stale Run Reaper this
 	// codebase doesn't have.
 	ErrNoWorkerAvailable = errors.New("no worker available for this execution engine")
+	// ErrOrganizationArchived - same meaning as tenancy/domain's own
+	// sentinel, redeclared here per this codebase's no-cross-context-
+	// import rule. TriggerRunService checks this before creating a new
+	// Run in an archived Organization - CancelRunService deliberately
+	// does NOT (stopping something already running should stay possible
+	// regardless of archival status).
+	ErrOrganizationArchived = errors.New("organization is archived")
 )
 
 type ValidationError struct {

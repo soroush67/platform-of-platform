@@ -82,6 +82,15 @@ type ScopedPermissionChecker interface {
 	HasPermissionAtScope(ctx context.Context, organizationID, userID, permission string, projectID, workspaceID *string) (bool, error)
 }
 
+// OrganizationChecker - this context's port into Tenancy for "is this
+// Organization archived" (docs/architecture/13-module-identity-rbac-
+// tenancy.md §1). TriggerRunService checks this before creating a new
+// Run - same enforcement point Project/Workspace/Variable creation
+// already apply.
+type OrganizationChecker interface {
+	IsArchived(ctx context.Context, organizationID string) (bool, error)
+}
+
 // WorkspaceEngineReader is RunDispatchService's own port into Workspace -
 // it needs the Workspace's ExecutionEngine to pick a matching connected
 // Worker, and nothing else about the Workspace, so it asks for exactly

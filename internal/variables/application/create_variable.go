@@ -35,12 +35,13 @@ type CreateVariableService struct {
 	environmentChecker EnvironmentChecker
 	workspaceChecker   WorkspaceChecker
 	permChecker        PermissionChecker
+	orgChecker         OrganizationChecker
 }
 
-func NewCreateVariableService(repo VariableRepository, membership MembershipChecker, projectChecker ProjectChecker, environmentChecker EnvironmentChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker) *CreateVariableService {
+func NewCreateVariableService(repo VariableRepository, membership MembershipChecker, projectChecker ProjectChecker, environmentChecker EnvironmentChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker, orgChecker OrganizationChecker) *CreateVariableService {
 	return &CreateVariableService{
 		repo: repo, membership: membership, projectChecker: projectChecker, environmentChecker: environmentChecker,
-		workspaceChecker: workspaceChecker, permChecker: permChecker,
+		workspaceChecker: workspaceChecker, permChecker: permChecker, orgChecker: orgChecker,
 	}
 }
 
@@ -77,6 +78,17 @@ func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableIn
 	}
 	if !allowed {
 		return nil, domain.ErrForbidden
+	}
+
+	// An archived Organization can't grow new structure - same
+	// enforcement point tenancy.CreateProjectService/workspace.
+	// CreateWorkspaceService already apply.
+	archived, err := s.orgChecker.IsArchived(ctx, in.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	if archived {
+		return nil, domain.ErrOrganizationArchived
 	}
 
 	if err := s.repo.Create(ctx, v); err != nil {

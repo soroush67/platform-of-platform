@@ -119,7 +119,7 @@ func main() {
 	createEnvironmentService := workspaceapp.NewCreateEnvironmentService(environmentRepo, membershipRepo, roleBindingRepo, projectRepo)
 	listEnvironmentsService := workspaceapp.NewListEnvironmentsService(environmentRepo, membershipRepo, projectRepo)
 	getEnvironmentService := workspaceapp.NewGetEnvironmentService(environmentRepo, membershipRepo, projectRepo)
-	createWorkspaceService := workspaceapp.NewCreateWorkspaceService(workspaceRepo, environmentRepo, membershipRepo, roleBindingRepo, projectRepo)
+	createWorkspaceService := workspaceapp.NewCreateWorkspaceService(workspaceRepo, environmentRepo, membershipRepo, roleBindingRepo, projectRepo, orgRepo)
 	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo)
 	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo)
 
@@ -132,15 +132,16 @@ func main() {
 	workerRegistry := executiongrpc.NewRegistry()
 
 	runRepo := executionpg.NewRunRepository(pool)
-	triggerRunService := executionapp.NewTriggerRunService(runRepo, workspaceRepo, workspaceRepo, roleBindingRepo)
+	triggerRunService := executionapp.NewTriggerRunService(runRepo, workspaceRepo, workspaceRepo, roleBindingRepo, orgRepo)
 	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo, workerRegistry)
 	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
 	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo)
 	staleRunReaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, cfg.RunStaleAfter, cfg.RunReaperInterval, logger)
+	purgeReaper := tenancyapp.NewPurgeReaperService(orgRepo, cfg.OrgPurgeAfter, cfg.OrgPurgeReaperInterval, logger)
 
 	variableRepo := variablespg.NewVariableRepository(pool)
-	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo)
+	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo, orgRepo)
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
 
@@ -229,6 +230,10 @@ func main() {
 
 	g.Go(func() error {
 		return staleRunReaper.Run(gctx)
+	})
+
+	g.Go(func() error {
+		return purgeReaper.Run(gctx)
 	})
 
 	g.Go(func() error {

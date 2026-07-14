@@ -29,10 +29,11 @@ type CreateWorkspaceService struct {
 	membership      MembershipChecker
 	permChecker     ScopedPermissionChecker
 	projectChecker  ProjectChecker
+	orgChecker      OrganizationChecker
 }
 
-func NewCreateWorkspaceService(repo WorkspaceRepository, environmentRepo EnvironmentRepository, membership MembershipChecker, permChecker ScopedPermissionChecker, projectChecker ProjectChecker) *CreateWorkspaceService {
-	return &CreateWorkspaceService{repo: repo, environmentRepo: environmentRepo, membership: membership, permChecker: permChecker, projectChecker: projectChecker}
+func NewCreateWorkspaceService(repo WorkspaceRepository, environmentRepo EnvironmentRepository, membership MembershipChecker, permChecker ScopedPermissionChecker, projectChecker ProjectChecker, orgChecker OrganizationChecker) *CreateWorkspaceService {
+	return &CreateWorkspaceService{repo: repo, environmentRepo: environmentRepo, membership: membership, permChecker: permChecker, projectChecker: projectChecker, orgChecker: orgChecker}
 }
 
 func (s *CreateWorkspaceService) Execute(ctx context.Context, in CreateWorkspaceInput) (*domain.Workspace, error) {
@@ -65,6 +66,17 @@ func (s *CreateWorkspaceService) Execute(ctx context.Context, in CreateWorkspace
 	}
 	if !allowed {
 		return nil, domain.ErrForbidden
+	}
+
+	// An archived Organization can't grow new structure - same
+	// enforcement point tenancy.CreateProjectService already applies to
+	// Projects (docs/architecture/13-module-identity-rbac-tenancy.md §1).
+	archived, err := s.orgChecker.IsArchived(ctx, in.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	if archived {
+		return nil, domain.ErrOrganizationArchived
 	}
 
 	// Verify EnvironmentID, if given, actually belongs to ProjectID -

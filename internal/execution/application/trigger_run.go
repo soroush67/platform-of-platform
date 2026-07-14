@@ -22,10 +22,11 @@ type TriggerRunService struct {
 	locker           WorkspaceLocker
 	workspaceChecker WorkspaceChecker
 	permChecker      ScopedPermissionChecker
+	orgChecker       OrganizationChecker
 }
 
-func NewTriggerRunService(runRepo RunRepository, locker WorkspaceLocker, workspaceChecker WorkspaceChecker, permChecker ScopedPermissionChecker) *TriggerRunService {
-	return &TriggerRunService{runRepo: runRepo, locker: locker, workspaceChecker: workspaceChecker, permChecker: permChecker}
+func NewTriggerRunService(runRepo RunRepository, locker WorkspaceLocker, workspaceChecker WorkspaceChecker, permChecker ScopedPermissionChecker, orgChecker OrganizationChecker) *TriggerRunService {
+	return &TriggerRunService{runRepo: runRepo, locker: locker, workspaceChecker: workspaceChecker, permChecker: permChecker, orgChecker: orgChecker}
 }
 
 func (s *TriggerRunService) Execute(ctx context.Context, in TriggerRunInput) (*domain.Run, error) {
@@ -43,6 +44,18 @@ func (s *TriggerRunService) Execute(ctx context.Context, in TriggerRunInput) (*d
 	}
 	if !allowed {
 		return nil, domain.ErrForbidden
+	}
+
+	// An archived Organization can't grow new structure - same
+	// enforcement point Project/Workspace/Variable creation already
+	// apply. Deliberately not checked in CancelRunService: stopping
+	// something already running should stay possible either way.
+	archived, err := s.orgChecker.IsArchived(ctx, in.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	if archived {
+		return nil, domain.ErrOrganizationArchived
 	}
 
 	run, err := domain.NewRun(in.OrganizationID, in.WorkspaceID, in.RequestingUserID)

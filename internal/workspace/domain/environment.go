@@ -28,6 +28,13 @@ var ErrProjectNotFound = errors.New("project not found")
 // cross-context-import reason as ErrProjectNotFound above.
 var ErrForbidden = errors.New("forbidden")
 
+// ErrOrganizationArchived - same meaning as tenancy/domain's own sentinel
+// (maps to 409, "the action is fine, there's nowhere left to put it"),
+// redeclared here for the same cross-context-import reason as
+// ErrProjectNotFound above. CreateWorkspaceService checks this before
+// creating a new Workspace in an archived Organization.
+var ErrOrganizationArchived = errors.New("organization is archived")
+
 type ValidationError struct {
 	Message string
 }

@@ -18,6 +18,11 @@ var (
 	// resolve to a real Organization/Project/Environment/Workspace in
 	// this org, checked via the ScopeChecker ports below.
 	ErrScopeNotFound = errors.New("scope not found")
+	// ErrOrganizationArchived - same meaning as tenancy/domain's own
+	// sentinel, redeclared here per this codebase's no-cross-context-
+	// import rule. CreateVariableService checks this before creating a
+	// new Variable in an archived Organization.
+	ErrOrganizationArchived = errors.New("organization is archived")
 )
 
 type ValidationError struct {

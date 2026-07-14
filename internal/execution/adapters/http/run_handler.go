@@ -59,6 +59,8 @@ func writeExecutionError(w http.ResponseWriter, err error, notFoundTitle string)
 		httpserver.WriteProblem(w, http.StatusConflict, "workspace is locked", "another run is already in progress on this workspace")
 	case errors.Is(err, domain.ErrRunAlreadyTerminal):
 		httpserver.WriteProblem(w, http.StatusConflict, "run already terminal", "")
+	case errors.Is(err, domain.ErrOrganizationArchived):
+		httpserver.WriteProblem(w, http.StatusConflict, "organization is archived", "")
 	default:
 		var validationErr *domain.ValidationError
 		if errors.As(err, &validationErr) {

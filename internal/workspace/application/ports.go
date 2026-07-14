@@ -57,3 +57,13 @@ type ScopedPermissionChecker interface {
 type ProjectChecker interface {
 	ProjectExists(ctx context.Context, organizationID, projectID string) (bool, error)
 }
+
+// OrganizationChecker - this context's port into Tenancy for "is this
+// Organization archived" (docs/architecture/13-module-identity-rbac-
+// tenancy.md §1). CreateWorkspaceService checks this before creating a
+// new Workspace - an archived org can't grow new structure, the same
+// enforcement point tenancy.CreateProjectService already applies to
+// Projects.
+type OrganizationChecker interface {
+	IsArchived(ctx context.Context, organizationID string) (bool, error)
+}

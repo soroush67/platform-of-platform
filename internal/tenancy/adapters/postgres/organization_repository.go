@@ -8,6 +8,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -155,6 +156,130 @@ func (r *OrganizationRepository) Archive(ctx context.Context, org *domain.Organi
 	})
 	if err != nil {
 		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// IsArchived is the narrow, cheap check the write paths this codebase
+// actually gates on (CreateWorkspaceService, CreateVariableService,
+// TriggerRunService) use - a single status column read, not a full
+// GetByID + json.Unmarshal of settings/quota those callers don't need.
+func (r *OrganizationRepository) IsArchived(ctx context.Context, organizationID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	var status string
+	err = tx.QueryRow(ctx, `SELECT status FROM organizations WHERE id = $1`, organizationID).Scan(&status)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, domain.ErrOrganizationNotFound
+		}
+		return false, err
+	}
+
+	return status == domain.OrganizationStatusArchived, tx.Commit(ctx)
+}
+
+// FindOrganizationsPastPurgeWindow is the Purge Reaper's own query -
+// docs/architecture/13-module-identity-rbac-tenancy.md §1: "schedules a
+// background purge job 30 days out." Deliberately reads outbox_events,
+// NOT the organizations table directly - organizations has FORCE ROW
+// LEVEL SECURITY (migrations/0001_init.up.sql), so a plain query against
+// it from the platform_app connection with no app.current_org_id set
+// would silently return zero rows for every org, not an error (found
+// for real: the first version of this method queried `organizations`
+// directly and the reaper never purged anything, no error logged
+// either, until this was traced back to RLS). outbox_events has
+// deliberately no RLS (migrations/0007_outbox_audit.up.sql's own
+// comment on why) - the exact same reason execution's own
+// FindStaleApplyingRuns reads outbox_events instead of the (also
+// RLS-protected) runs table for its cross-org scan. Archive() already
+// writes an OrganizationArchived event with the org id as target_id;
+// this is a real, working cross-org read of that event, not the
+// underlying table.
+func (r *OrganizationRepository) FindOrganizationsPastPurgeWindow(ctx context.Context, archivedBefore time.Time) ([]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT payload->>'target_id' FROM outbox_events WHERE event_type = 'OrganizationArchived' AND occurred_at < $1`,
+		archivedBefore,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, rows.Err()
+}
+
+// Purge is the real, hard-delete second half of the two-stage removal
+// docs/architecture/13-module-identity-rbac-tenancy.md §1 describes -
+// Archive (above) is the reversible soft-delete an Owner triggers
+// directly; Purge is what PurgeReaperService calls once an org has sat
+// archived past the grace window, and it's genuinely irreversible (no
+// outbox event - by the time this runs, deleting outbox_events is one
+// of this very method's own steps, so there's nothing left to write an
+// event *into*). Still needs the same set_config(...)-scoped-transaction
+// every other org-scoped write in this codebase uses: every table here
+// except outbox_events has FORCE ROW LEVEL SECURITY
+// (migrations/0001_init.up.sql onward) - without app.current_org_id set,
+// platform_app can't see or delete a single row in any of them, RLS
+// silently narrows every DELETE to zero rows instead of erroring (found
+// for real while verifying this - the first version omitted this and
+// every delete quietly matched nothing). Order matters: every table is
+// deleted in an order that respects its own foreign keys into ones
+// deleted after it (migrations/0001-0012's own dependency graph, read
+// directly rather than guessed) - runs before workspaces, role_bindings
+// before roles, etc. `users` is deliberately NOT touched: User is
+// platform-global (docs/architecture/03-domain-model.md §3), a purged
+// org's members simply lose their OrganizationMembership row, they
+// don't cease to exist as Users.
+func (r *OrganizationRepository) Purge(ctx context.Context, organizationID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	statements := []string{
+		`DELETE FROM runs WHERE organization_id = $1`,
+		`DELETE FROM outbox_events WHERE organization_id = $1`,
+		`DELETE FROM idempotency_keys WHERE organization_id = $1`,
+		`DELETE FROM variables WHERE organization_id = $1`,
+		`DELETE FROM workspaces WHERE organization_id = $1`,
+		`DELETE FROM environments WHERE organization_id = $1`,
+		`DELETE FROM team_memberships WHERE organization_id = $1`,
+		`DELETE FROM teams WHERE organization_id = $1`,
+		`DELETE FROM role_bindings WHERE organization_id = $1`,
+		`DELETE FROM roles WHERE organization_id = $1`,
+		`DELETE FROM projects WHERE organization_id = $1`,
+		`DELETE FROM organization_memberships WHERE organization_id = $1`,
+		`DELETE FROM audit_entries WHERE organization_id = $1`,
+		`DELETE FROM organizations WHERE id = $1`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(ctx, stmt, organizationID); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit(ctx)

@@ -63,6 +63,8 @@ func writeVariablesError(w http.ResponseWriter, err error, notFoundTitle string)
 		httpserver.WriteProblem(w, http.StatusNotFound, "scope not found", "")
 	case errors.Is(err, domain.ErrVariableNotFound):
 		httpserver.WriteProblem(w, http.StatusNotFound, notFoundTitle, "")
+	case errors.Is(err, domain.ErrOrganizationArchived):
+		httpserver.WriteProblem(w, http.StatusConflict, "organization is archived", "")
 	default:
 		var validationErr *domain.ValidationError
 		if errors.As(err, &validationErr) {
