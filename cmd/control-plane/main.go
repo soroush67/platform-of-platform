@@ -102,9 +102,17 @@ func main() {
 	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo)
 	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo)
 
+	// Worker registry + gRPC server (docs/architecture/17-workers.md §1) -
+	// created before the Execution services below since CancelRunService
+	// now needs it too (registry.Dispatch/CancelJob structurally satisfy
+	// Execution's own WorkerDispatcher/WorkerCanceler ports, same "one
+	// concrete type satisfies several ports" pattern already used for
+	// roleBindingRepo/workspaceRepo).
+	workerRegistry := executiongrpc.NewRegistry()
+
 	runRepo := executionpg.NewRunRepository(pool)
 	triggerRunService := executionapp.NewTriggerRunService(runRepo, workspaceRepo, workspaceRepo, roleBindingRepo)
-	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo)
+	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo, workerRegistry)
 	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
 	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo)
@@ -115,11 +123,6 @@ func main() {
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
 
-	// Worker registry + gRPC server (docs/architecture/17-workers.md §1) -
-	// registry.Dispatch structurally satisfies Execution's own
-	// WorkerDispatcher port, same "one concrete type satisfies several
-	// ports" pattern already used for roleBindingRepo/workspaceRepo.
-	workerRegistry := executiongrpc.NewRegistry()
 	runDispatchService := executionapp.NewRunDispatchService(runRepo, workspaceRepo, resolveVariableService, workerRegistry, workspaceRepo)
 	grpcWorkerServer := executiongrpc.NewServer(workerRegistry, workerReportService.HandleReport)
 

@@ -53,8 +53,8 @@ func (s *Server) StreamJobs(req *pb.StreamJobsRequest, stream pb.WorkerService_S
 		select {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
-		case job := <-entry.jobs:
-			if err := stream.Send(job); err != nil {
+		case cmd := <-entry.jobs:
+			if err := stream.Send(cmd); err != nil {
 				return err
 			}
 		}

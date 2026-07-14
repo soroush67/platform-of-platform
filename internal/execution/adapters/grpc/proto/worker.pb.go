@@ -178,6 +178,141 @@ func (x *StreamJobsRequest) GetWorkerId() string {
 	return ""
 }
 
+// WorkerCommand is the discriminated union StreamJobs actually carries -
+// exactly one of the two real commands a Worker can receive.
+type WorkerCommand struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Command:
+	//
+	//	*WorkerCommand_JobAssignment
+	//	*WorkerCommand_CancelJob
+	Command       isWorkerCommand_Command `protobuf_oneof:"command"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WorkerCommand) Reset() {
+	*x = WorkerCommand{}
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WorkerCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkerCommand) ProtoMessage() {}
+
+func (x *WorkerCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkerCommand.ProtoReflect.Descriptor instead.
+func (*WorkerCommand) Descriptor() ([]byte, []int) {
+	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *WorkerCommand) GetCommand() isWorkerCommand_Command {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+func (x *WorkerCommand) GetJobAssignment() *JobAssignment {
+	if x != nil {
+		if x, ok := x.Command.(*WorkerCommand_JobAssignment); ok {
+			return x.JobAssignment
+		}
+	}
+	return nil
+}
+
+func (x *WorkerCommand) GetCancelJob() *CancelJob {
+	if x != nil {
+		if x, ok := x.Command.(*WorkerCommand_CancelJob); ok {
+			return x.CancelJob
+		}
+	}
+	return nil
+}
+
+type isWorkerCommand_Command interface {
+	isWorkerCommand_Command()
+}
+
+type WorkerCommand_JobAssignment struct {
+	JobAssignment *JobAssignment `protobuf:"bytes,1,opt,name=job_assignment,json=jobAssignment,proto3,oneof"`
+}
+
+type WorkerCommand_CancelJob struct {
+	CancelJob *CancelJob `protobuf:"bytes,2,opt,name=cancel_job,json=cancelJob,proto3,oneof"`
+}
+
+func (*WorkerCommand_JobAssignment) isWorkerCommand_Command() {}
+
+func (*WorkerCommand_CancelJob) isWorkerCommand_Command() {}
+
+// CancelJob (docs/architecture/17-workers.md §6): "Worker sends SIGTERM
+// to the plugin subprocess's entire process group... waits a
+// configurable grace period... then SIGKILL if it hasn't exited." The
+// Run's own status transition already happened synchronously in
+// CancelRunService before this is ever sent - this message's only job
+// is to make the real subprocess actually stop, not to trigger a second
+// DB write.
+type CancelJob struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelJob) Reset() {
+	*x = CancelJob{}
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelJob) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelJob) ProtoMessage() {}
+
+func (x *CancelJob) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelJob.ProtoReflect.Descriptor instead.
+func (*CancelJob) Descriptor() ([]byte, []int) {
+	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *CancelJob) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
 type JobAssignment struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	RunId           string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
@@ -196,7 +331,7 @@ type JobAssignment struct {
 
 func (x *JobAssignment) Reset() {
 	*x = JobAssignment{}
-	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[3]
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -208,7 +343,7 @@ func (x *JobAssignment) String() string {
 func (*JobAssignment) ProtoMessage() {}
 
 func (x *JobAssignment) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[3]
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +356,7 @@ func (x *JobAssignment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobAssignment.ProtoReflect.Descriptor instead.
 func (*JobAssignment) Descriptor() ([]byte, []int) {
-	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{3}
+	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *JobAssignment) GetRunId() string {
@@ -285,7 +420,7 @@ type JobStatusReport struct {
 
 func (x *JobStatusReport) Reset() {
 	*x = JobStatusReport{}
-	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[4]
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -297,7 +432,7 @@ func (x *JobStatusReport) String() string {
 func (*JobStatusReport) ProtoMessage() {}
 
 func (x *JobStatusReport) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[4]
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -310,7 +445,7 @@ func (x *JobStatusReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStatusReport.ProtoReflect.Descriptor instead.
 func (*JobStatusReport) Descriptor() ([]byte, []int) {
-	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{4}
+	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *JobStatusReport) GetRunId() string {
@@ -364,7 +499,7 @@ type Ack struct {
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[5]
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -376,7 +511,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[5]
+	mi := &file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -389,7 +524,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{5}
+	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Ack) GetOk() bool {
@@ -414,7 +549,14 @@ const file_internal_execution_adapters_grpc_proto_worker_proto_rawDesc = "" +
 	"\x10RegisterResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\"0\n" +
 	"\x11StreamJobsRequest\x12\x1b\n" +
-	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"\xc2\x01\n" +
+	"\tworker_id\x18\x01 \x01(\tR\bworkerId\"\x8e\x01\n" +
+	"\rWorkerCommand\x12>\n" +
+	"\x0ejob_assignment\x18\x01 \x01(\v2\x15.worker.JobAssignmentH\x00R\rjobAssignment\x122\n" +
+	"\n" +
+	"cancel_job\x18\x02 \x01(\v2\x11.worker.CancelJobH\x00R\tcancelJobB\t\n" +
+	"\acommand\"\"\n" +
+	"\tCancelJob\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"\xc2\x01\n" +
 	"\rJobAssignment\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12!\n" +
@@ -433,7 +575,7 @@ const file_internal_execution_adapters_grpc_proto_worker_proto_rawDesc = "" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12@\n" +
 	"\n" +
-	"StreamJobs\x12\x19.worker.StreamJobsRequest\x1a\x15.worker.JobAssignment0\x01\x127\n" +
+	"StreamJobs\x12\x19.worker.StreamJobsRequest\x1a\x15.worker.WorkerCommand0\x01\x127\n" +
 	"\x0fReportJobStatus\x12\x17.worker.JobStatusReport\x1a\v.worker.AckB=Z;platform-of-platform/internal/execution/adapters/grpc/protob\x06proto3"
 
 var (
@@ -448,29 +590,33 @@ func file_internal_execution_adapters_grpc_proto_worker_proto_rawDescGZIP() []by
 	return file_internal_execution_adapters_grpc_proto_worker_proto_rawDescData
 }
 
-var file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_internal_execution_adapters_grpc_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),   // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),  // 1: worker.RegisterResponse
 	(*StreamJobsRequest)(nil), // 2: worker.StreamJobsRequest
-	(*JobAssignment)(nil),     // 3: worker.JobAssignment
-	(*JobStatusReport)(nil),   // 4: worker.JobStatusReport
-	(*Ack)(nil),               // 5: worker.Ack
-	nil,                       // 6: worker.RegisterRequest.LabelsEntry
+	(*WorkerCommand)(nil),     // 3: worker.WorkerCommand
+	(*CancelJob)(nil),         // 4: worker.CancelJob
+	(*JobAssignment)(nil),     // 5: worker.JobAssignment
+	(*JobStatusReport)(nil),   // 6: worker.JobStatusReport
+	(*Ack)(nil),               // 7: worker.Ack
+	nil,                       // 8: worker.RegisterRequest.LabelsEntry
 }
 var file_internal_execution_adapters_grpc_proto_worker_proto_depIdxs = []int32{
-	6, // 0: worker.RegisterRequest.labels:type_name -> worker.RegisterRequest.LabelsEntry
-	0, // 1: worker.WorkerService.Register:input_type -> worker.RegisterRequest
-	2, // 2: worker.WorkerService.StreamJobs:input_type -> worker.StreamJobsRequest
-	4, // 3: worker.WorkerService.ReportJobStatus:input_type -> worker.JobStatusReport
-	1, // 4: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	3, // 5: worker.WorkerService.StreamJobs:output_type -> worker.JobAssignment
-	5, // 6: worker.WorkerService.ReportJobStatus:output_type -> worker.Ack
-	4, // [4:7] is the sub-list for method output_type
-	1, // [1:4] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	8, // 0: worker.RegisterRequest.labels:type_name -> worker.RegisterRequest.LabelsEntry
+	5, // 1: worker.WorkerCommand.job_assignment:type_name -> worker.JobAssignment
+	4, // 2: worker.WorkerCommand.cancel_job:type_name -> worker.CancelJob
+	0, // 3: worker.WorkerService.Register:input_type -> worker.RegisterRequest
+	2, // 4: worker.WorkerService.StreamJobs:input_type -> worker.StreamJobsRequest
+	6, // 5: worker.WorkerService.ReportJobStatus:input_type -> worker.JobStatusReport
+	1, // 6: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	3, // 7: worker.WorkerService.StreamJobs:output_type -> worker.WorkerCommand
+	7, // 8: worker.WorkerService.ReportJobStatus:output_type -> worker.Ack
+	6, // [6:9] is the sub-list for method output_type
+	3, // [3:6] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_internal_execution_adapters_grpc_proto_worker_proto_init() }
@@ -478,13 +624,17 @@ func file_internal_execution_adapters_grpc_proto_worker_proto_init() {
 	if File_internal_execution_adapters_grpc_proto_worker_proto != nil {
 		return
 	}
+	file_internal_execution_adapters_grpc_proto_worker_proto_msgTypes[3].OneofWrappers = []any{
+		(*WorkerCommand_JobAssignment)(nil),
+		(*WorkerCommand_CancelJob)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_execution_adapters_grpc_proto_worker_proto_rawDesc), len(file_internal_execution_adapters_grpc_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

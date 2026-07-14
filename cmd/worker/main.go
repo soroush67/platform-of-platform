@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -70,6 +71,22 @@ func main() {
 	}
 }
 
+// jobHandle is what lets a later CancelJob command actually reach a Job
+// already running in its own goroutine - cancel just calls the stored
+// context.CancelFunc, which handleJob's own select on ctx.Done() below
+// is what turns into a real SIGTERM/SIGKILL to the subprocess.
+type jobHandle struct {
+	cancel context.CancelFunc
+}
+
+// runOnce processes commands from one StreamJobs connection until it
+// breaks. JobAssignments are handled in their own goroutine (not inline
+// in this receive loop) specifically so a CancelJob for an *earlier*
+// Job can still be received and acted on while a later one is still
+// running - a single sequential loop that called handleJob() directly
+// couldn't call stream.Recv() again until the current Job finished,
+// which would make Cancel commands impossible to deliver while
+// anything was in flight.
 func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string, logger *slog.Logger) error {
 	regResp, err := client.Register(ctx, &pb.RegisterRequest{
 		WorkerId:         workerID,
@@ -86,14 +103,65 @@ func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string
 		return err
 	}
 
+	var mu sync.Mutex
+	running := make(map[string]*jobHandle)
+
 	for {
-		job, err := stream.Recv()
+		cmd, err := stream.Recv()
 		if err != nil {
 			return err
 		}
-		logger.Info("received job assignment", "run_id", job.RunId, "engine", job.ExecutionEngine)
-		handleJob(ctx, client, job, logger)
+
+		switch c := cmd.Command.(type) {
+		case *pb.WorkerCommand_JobAssignment:
+			job := c.JobAssignment
+			jobCtx, cancel := context.WithCancel(ctx)
+
+			mu.Lock()
+			running[job.RunId] = &jobHandle{cancel: cancel}
+			mu.Unlock()
+
+			logger.Info("received job assignment", "run_id", job.RunId, "engine", job.ExecutionEngine)
+			go func() {
+				defer func() {
+					mu.Lock()
+					delete(running, job.RunId)
+					mu.Unlock()
+					cancel() // release jobCtx's own resources either way
+				}()
+				handleJob(jobCtx, client, job, logger)
+			}()
+
+		case *pb.WorkerCommand_CancelJob:
+			runID := c.CancelJob.RunId
+			mu.Lock()
+			h, ok := running[runID]
+			mu.Unlock()
+			if !ok {
+				// Already finished, or this Worker was never the one
+				// running it (a stale/duplicate route) - nothing to do,
+				// not an error.
+				logger.Info("received cancel for a run not active here, ignoring", "run_id", runID)
+				continue
+			}
+			logger.Info("received cancel command", "run_id", runID)
+			h.cancel()
+		}
 	}
+}
+
+// cancelGracePeriod - docs/architecture/17-workers.md §6: "waits a
+// configurable grace period (default 30s), then SIGKILL if it hasn't
+// exited." Shortened via env for real verification (waiting 30 real
+// seconds every test run isn't practical), matching the same pattern
+// already used for the Stale Run Reaper's own timings.
+func cancelGracePeriod() time.Duration {
+	if v := os.Getenv("CANCEL_GRACE_PERIOD"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 30 * time.Second
 }
 
 func handleJob(ctx context.Context, client pb.WorkerServiceClient, job *pb.JobAssignment, logger *slog.Logger) {
@@ -117,27 +185,78 @@ func handleJob(ctx context.Context, client pb.WorkerServiceClient, job *pb.JobAs
 	tmpFile.Close()
 
 	projectName := "run-" + job.RunId
-	var out bytes.Buffer
+
 	// docker-compose (hyphenated v2 standalone binary), not `docker
 	// compose` (the plugin subcommand) - the plugin isn't installed in
 	// this environment (verified for real: `docker compose` errored
 	// with "unknown shorthand flag" since docker.io doesn't ship it),
 	// the standalone binary is what's actually available.
-	cmd := exec.CommandContext(ctx, "docker-compose", "-f", tmpFile.Name(), "-p", projectName, "up", "-d")
+	var out bytes.Buffer
+	cmd := exec.Command("docker-compose", "-f", tmpFile.Name(), "-p", projectName, "up", "-d")
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	// Its own process group (docs/architecture/17-workers.md §6: "SIGTERM
+	// to the plugin subprocess's entire process group... a terraform
+	// apply spawns provider subprocesses of its own that need to receive
+	// the signal too" - docker-compose can equally spawn its own
+	// children) - plain exec.CommandContext only ever SIGKILLs the
+	// immediate process on ctx cancellation, with no grace period and no
+	// process-group reach, so this Job manages its own subprocess
+	// lifecycle explicitly instead.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	logger.Info("running docker compose up", "run_id", job.RunId, "project", projectName)
-	runErr := cmd.Run()
-
-	if runErr != nil {
-		logger.Error("docker compose up failed", "run_id", job.RunId, "error", runErr, "output", out.String())
-		report(ctx, client, job, "failed", out.String(), runErr.Error())
+	if err := cmd.Start(); err != nil {
+		report(ctx, client, job, "failed", "", "failed to start docker-compose: "+err.Error())
 		return
 	}
 
-	logger.Info("docker compose up succeeded", "run_id", job.RunId, "output", out.String())
-	report(ctx, client, job, "applied", out.String(), "")
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			logger.Error("docker compose up failed", "run_id", job.RunId, "error", runErr, "output", out.String())
+			report(ctx, client, job, "failed", out.String(), runErr.Error())
+			return
+		}
+		logger.Info("docker compose up succeeded", "run_id", job.RunId, "output", out.String())
+		report(ctx, client, job, "applied", out.String(), "")
+
+	case <-ctx.Done():
+		// Real cancellation - docs/architecture/17-workers.md §6's exact
+		// sequence: SIGTERM the whole process group, wait a grace
+		// period, SIGKILL if it hasn't exited by then.
+		logger.Info("run canceled, sending SIGTERM to process group", "run_id", job.RunId, "pgid", cmd.Process.Pid)
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+
+		select {
+		case <-done:
+		case <-time.After(cancelGracePeriod()):
+			logger.Info("grace period expired, sending SIGKILL", "run_id", job.RunId)
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+
+		// Best-effort cleanup of any partially-created resources
+		// (docs/architecture/17-workers.md §6: "the container itself is
+		// destroyed regardless of clean-exit success") - a compose file
+		// with more than one service could have had some, not all, of
+		// its containers created before the kill landed.
+		cleanup := exec.Command("docker-compose", "-f", tmpFile.Name(), "-p", projectName, "down")
+		if out, err := cleanup.CombinedOutput(); err != nil {
+			logger.Error("post-cancel cleanup failed", "run_id", job.RunId, "error", err, "output", string(out))
+		}
+
+		// No ReportJobStatus call here - CancelRunService already made
+		// the Run's `canceled` transition synchronously, in the same
+		// request that sent this Worker its CancelJob command
+		// (cmd/control-plane's cancel_run.go). This Job's only
+		// remaining responsibility was to make the real subprocess
+		// actually stop, not to report a second, redundant status.
+		logger.Info("run canceled and cleaned up", "run_id", job.RunId)
+	}
 }
 
 func report(ctx context.Context, client pb.WorkerServiceClient, job *pb.JobAssignment, status, logLine, errMsg string) {

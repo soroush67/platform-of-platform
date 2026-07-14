@@ -99,3 +99,16 @@ type VariableResolver interface {
 type WorkerDispatcher interface {
 	Dispatch(ctx context.Context, runID, organizationID, workspaceID, executionEngine, configBundle string) (bool, error)
 }
+
+// WorkerCanceler is CancelRunService's port into the gRPC adapter's
+// Registry (docs/architecture/17-workers.md §6) - a real Cancel command
+// reaching the Worker that's actually running the Job, not just a DB
+// status flip. Returns (false, nil), not an error, when no Worker is
+// currently tracked as running this Run (already finished, never
+// dispatched, or its Worker disconnected) - CancelRunService's own DB
+// transition already happened before this is ever called, so this
+// failing to find a live Worker to notify isn't itself a failure of the
+// cancel operation.
+type WorkerCanceler interface {
+	CancelJob(ctx context.Context, runID string) (bool, error)
+}

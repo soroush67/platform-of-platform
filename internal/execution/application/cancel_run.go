@@ -10,13 +10,14 @@ import (
 // `POST .../runs/{run}/cancel`. Same workspace:apply permission as
 // triggering - whoever can start a Run can stop it.
 type CancelRunService struct {
-	runRepo RunRepository
-	locker  WorkspaceLocker
-	perm    PermissionChecker
+	runRepo  RunRepository
+	locker   WorkspaceLocker
+	perm     PermissionChecker
+	canceler WorkerCanceler
 }
 
-func NewCancelRunService(runRepo RunRepository, locker WorkspaceLocker, perm PermissionChecker) *CancelRunService {
-	return &CancelRunService{runRepo: runRepo, locker: locker, perm: perm}
+func NewCancelRunService(runRepo RunRepository, locker WorkspaceLocker, perm PermissionChecker, canceler WorkerCanceler) *CancelRunService {
+	return &CancelRunService{runRepo: runRepo, locker: locker, perm: perm, canceler: canceler}
 }
 
 func (s *CancelRunService) Execute(ctx context.Context, organizationID, workspaceID, runID, requestingUserID string) (*domain.Run, error) {
@@ -53,6 +54,16 @@ func (s *CancelRunService) Execute(ctx context.Context, organizationID, workspac
 	if err := s.locker.Unlock(ctx, organizationID, workspaceID, run.ID); err != nil {
 		return nil, err
 	}
+
+	// Tell the Worker to actually stop the real subprocess
+	// (docs/architecture/17-workers.md §6) - deliberately best-effort,
+	// after the DB-level cancellation above, not a precondition for it:
+	// the Run is already, authoritatively, `canceled` regardless of
+	// whether a live Worker is still reachable to notify. Ignoring both
+	// return values is a deliberate choice, not an oversight - there is
+	// nothing left for this operation to do differently based on
+	// whether a Worker was actually running this Run or not.
+	_, _ = s.canceler.CancelJob(ctx, run.ID)
 
 	return run, nil
 }

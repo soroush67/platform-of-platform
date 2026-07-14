@@ -44,9 +44,16 @@ type WorkerServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// StreamJobs is the long-lived connection - the Worker keeps this
 	// call open for its entire lifetime; the Control Plane pushes a
-	// JobAssignment down it every time the Run Dispatcher matches a
-	// queued Run to this Worker.
-	StreamJobs(ctx context.Context, in *StreamJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobAssignment], error)
+	// WorkerCommand down it every time the Run Dispatcher matches a
+	// queued Run to this Worker, or an operator cancels a Run this Worker
+	// is currently running. Carrying both message kinds down the one
+	// existing stream (docs/architecture/17-workers.md §6's Cancel) is
+	// deliberate: Workers never accept inbound connections at all (a real
+	// security property this design already committed to), so a Cancel
+	// command has nowhere else to travel except this same,
+	// Worker-initiated stream - there's no second RPC the Control Plane
+	// could call *on* the Worker.
+	StreamJobs(ctx context.Context, in *StreamJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkerCommand], error)
 	// ReportJobStatus is how progress/completion flows back - a plain
 	// unary call per status update, not a second stream.
 	ReportJobStatus(ctx context.Context, in *JobStatusReport, opts ...grpc.CallOption) (*Ack, error)
@@ -70,13 +77,13 @@ func (c *workerServiceClient) Register(ctx context.Context, in *RegisterRequest,
 	return out, nil
 }
 
-func (c *workerServiceClient) StreamJobs(ctx context.Context, in *StreamJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[JobAssignment], error) {
+func (c *workerServiceClient) StreamJobs(ctx context.Context, in *StreamJobsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WorkerCommand], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[0], WorkerService_StreamJobs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[StreamJobsRequest, JobAssignment]{ClientStream: stream}
+	x := &grpc.GenericClientStream[StreamJobsRequest, WorkerCommand]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -87,7 +94,7 @@ func (c *workerServiceClient) StreamJobs(ctx context.Context, in *StreamJobsRequ
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WorkerService_StreamJobsClient = grpc.ServerStreamingClient[JobAssignment]
+type WorkerService_StreamJobsClient = grpc.ServerStreamingClient[WorkerCommand]
 
 func (c *workerServiceClient) ReportJobStatus(ctx context.Context, in *JobStatusReport, opts ...grpc.CallOption) (*Ack, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -110,9 +117,16 @@ type WorkerServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// StreamJobs is the long-lived connection - the Worker keeps this
 	// call open for its entire lifetime; the Control Plane pushes a
-	// JobAssignment down it every time the Run Dispatcher matches a
-	// queued Run to this Worker.
-	StreamJobs(*StreamJobsRequest, grpc.ServerStreamingServer[JobAssignment]) error
+	// WorkerCommand down it every time the Run Dispatcher matches a
+	// queued Run to this Worker, or an operator cancels a Run this Worker
+	// is currently running. Carrying both message kinds down the one
+	// existing stream (docs/architecture/17-workers.md §6's Cancel) is
+	// deliberate: Workers never accept inbound connections at all (a real
+	// security property this design already committed to), so a Cancel
+	// command has nowhere else to travel except this same,
+	// Worker-initiated stream - there's no second RPC the Control Plane
+	// could call *on* the Worker.
+	StreamJobs(*StreamJobsRequest, grpc.ServerStreamingServer[WorkerCommand]) error
 	// ReportJobStatus is how progress/completion flows back - a plain
 	// unary call per status update, not a second stream.
 	ReportJobStatus(context.Context, *JobStatusReport) (*Ack, error)
@@ -129,7 +143,7 @@ type UnimplementedWorkerServiceServer struct{}
 func (UnimplementedWorkerServiceServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Register not implemented")
 }
-func (UnimplementedWorkerServiceServer) StreamJobs(*StreamJobsRequest, grpc.ServerStreamingServer[JobAssignment]) error {
+func (UnimplementedWorkerServiceServer) StreamJobs(*StreamJobsRequest, grpc.ServerStreamingServer[WorkerCommand]) error {
 	return status.Error(codes.Unimplemented, "method StreamJobs not implemented")
 }
 func (UnimplementedWorkerServiceServer) ReportJobStatus(context.Context, *JobStatusReport) (*Ack, error) {
@@ -179,11 +193,11 @@ func _WorkerService_StreamJobs_Handler(srv interface{}, stream grpc.ServerStream
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(WorkerServiceServer).StreamJobs(m, &grpc.GenericServerStream[StreamJobsRequest, JobAssignment]{ServerStream: stream})
+	return srv.(WorkerServiceServer).StreamJobs(m, &grpc.GenericServerStream[StreamJobsRequest, WorkerCommand]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WorkerService_StreamJobsServer = grpc.ServerStreamingServer[JobAssignment]
+type WorkerService_StreamJobsServer = grpc.ServerStreamingServer[WorkerCommand]
 
 func _WorkerService_ReportJobStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(JobStatusReport)
