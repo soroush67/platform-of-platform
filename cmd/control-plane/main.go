@@ -22,9 +22,12 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	"platform-of-platform/internal/platform/config"
-	"platform-of-platform/internal/tenancy/adapters/postgres"
-	tenancyapp "platform-of-platform/internal/tenancy/application"
+	identityhttp "platform-of-platform/internal/identity/adapters/http"
+	identitypg "platform-of-platform/internal/identity/adapters/postgres"
+	identityapp "platform-of-platform/internal/identity/application"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
+	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
+	tenancyapp "platform-of-platform/internal/tenancy/application"
 )
 
 func main() {
@@ -50,12 +53,18 @@ func main() {
 
 	// Manual wiring, in one place - docs/architecture/18-backend-structure.md §5's
 	// "no DI framework" decision: every dependency is greppable from here.
-	orgRepo := postgres.NewOrganizationRepository(pool)
+	orgRepo := tenancypg.NewOrganizationRepository(pool)
 	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo)
+	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo)
+
+	userRepo := identitypg.NewUserRepository(pool)
+	createUserService := identityapp.NewCreateUserService(userRepo)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
 	mux.HandleFunc("POST /api/v1/orgs", tenancyhttp.CreateOrganizationHandler(createOrgService))
+	mux.HandleFunc("GET /api/v1/orgs/{id}", tenancyhttp.GetOrganizationHandler(getOrgService))
+	mux.HandleFunc("POST /api/v1/users", identityhttp.CreateUserHandler(createUserService))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,

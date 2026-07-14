@@ -54,11 +54,38 @@ func CreateOrganizationHandler(svc *application.CreateOrganizationService) http.
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(organizationResponse{
-			ID:        org.ID,
-			Name:      org.Name,
-			Slug:      org.Slug,
-			CreatedAt: org.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		})
+		json.NewEncoder(w).Encode(toOrganizationResponse(org))
+	}
+}
+
+// GetOrganizationHandler implements GET /api/v1/orgs/{id} - see the use
+// case's own doc comment for what this endpoint does and doesn't yet
+// prove about tenant isolation.
+func GetOrganizationHandler(svc *application.GetOrganizationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+
+		org, err := svc.Execute(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, domain.ErrOrganizationNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to fetch organization", "")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(toOrganizationResponse(org))
+	}
+}
+
+func toOrganizationResponse(org *domain.Organization) organizationResponse {
+	return organizationResponse{
+		ID:        org.ID,
+		Name:      org.Name,
+		Slug:      org.Slug,
+		CreatedAt: org.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }

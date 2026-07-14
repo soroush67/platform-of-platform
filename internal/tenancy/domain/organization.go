@@ -3,12 +3,18 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrOrganizationNotFound is returned by OrganizationRepository.GetByID
+// when no row is visible - see the port's own doc comment for why that's
+// deliberately ambiguous between "doesn't exist" and "RLS hid it".
+var ErrOrganizationNotFound = errors.New("organization not found")
 
 // ValidationError distinguishes "the caller sent something invalid" (maps
 // to HTTP 400 at the adapter boundary) from any other error (maps to 500) -

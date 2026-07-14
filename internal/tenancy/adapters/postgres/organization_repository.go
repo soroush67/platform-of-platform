@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/tenancy/domain"
@@ -61,4 +62,49 @@ func (r *OrganizationRepository) Create(ctx context.Context, org *domain.Organiz
 	}
 
 	return tx.Commit(ctx)
+}
+
+// GetByID reads back one Organization. Uses the same set_config(...,
+// true)-inside-a-transaction scoping as Create - is_local=true only
+// actually scopes to "this transaction" if there *is* one; called outside
+// an explicit BEGIN/COMMIT, the setting would revert before the SELECT
+// ever ran (each unwrapped statement is its own implicit transaction).
+// The WHERE id = $1 alongside the RLS policy is deliberate belt-and-
+// braces, not redundant: it's what turns "RLS hid every row" and
+// "genuinely zero rows" into the same observable pgx.ErrNoRows either
+// way, rather than one path returning some *other* visible org's row by
+// accident if this method were ever called without setting the session
+// variable first.
+func (r *OrganizationRepository) GetByID(ctx context.Context, id string) (*domain.Organization, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, id); err != nil {
+		return nil, err
+	}
+
+	var org domain.Organization
+	var settings, quota []byte
+	err = tx.QueryRow(ctx,
+		`SELECT id, name, slug, settings, quota, created_at FROM organizations WHERE id = $1`,
+		id,
+	).Scan(&org.ID, &org.Name, &org.Slug, &settings, &quota, &org.CreatedAt)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, domain.ErrOrganizationNotFound
+		}
+		return nil, err
+	}
+
+	if err := json.Unmarshal(settings, &org.Settings); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(quota, &org.Quota); err != nil {
+		return nil, err
+	}
+
+	return &org, tx.Commit(ctx)
 }
