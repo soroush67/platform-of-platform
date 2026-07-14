@@ -29,10 +29,11 @@ type CreateProjectService struct {
 	repo           ProjectRepository
 	membershipRepo MembershipRepository
 	permChecker    PermissionChecker
+	orgRepo        OrganizationRepository
 }
 
-func NewCreateProjectService(repo ProjectRepository, membershipRepo MembershipRepository, permChecker PermissionChecker) *CreateProjectService {
-	return &CreateProjectService{repo: repo, membershipRepo: membershipRepo, permChecker: permChecker}
+func NewCreateProjectService(repo ProjectRepository, membershipRepo MembershipRepository, permChecker PermissionChecker, orgRepo OrganizationRepository) *CreateProjectService {
+	return &CreateProjectService{repo: repo, membershipRepo: membershipRepo, permChecker: permChecker, orgRepo: orgRepo}
 }
 
 func (s *CreateProjectService) Execute(ctx context.Context, in CreateProjectInput) (*domain.Project, error) {
@@ -54,6 +55,21 @@ func (s *CreateProjectService) Execute(ctx context.Context, in CreateProjectInpu
 	}
 	if !allowed {
 		return nil, domain.ErrForbidden
+	}
+
+	// An archived Organization can't grow new structure - the one
+	// enforcement point this slice actually wires up (ArchiveOrganization
+	// itself only flips a status flag otherwise). Deliberately narrow:
+	// this doesn't freeze every possible write against an archived org
+	// (Workspace creation, Variables, triggering Runs on *existing*
+	// Workspaces all remain unguarded) - a real, named, deferred gap,
+	// not an oversight.
+	org, err := s.orgRepo.GetByID(ctx, in.OrganizationID)
+	if err != nil {
+		return nil, err
+	}
+	if org.Status == domain.OrganizationStatusArchived {
+		return nil, domain.ErrOrganizationArchived
 	}
 
 	project, err := domain.NewProject(in.OrganizationID, in.Name, in.Slug, in.Description)

@@ -22,6 +22,7 @@ type organizationResponse struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Slug      string `json:"slug"`
+	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -193,6 +194,47 @@ func toOrganizationResponse(org *domain.Organization) organizationResponse {
 		ID:        org.ID,
 		Name:      org.Name,
 		Slug:      org.Slug,
+		Status:    org.Status,
 		CreatedAt: org.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+// ArchiveOrganizationHandler implements DELETE /api/v1/orgs/{id}
+// (docs/architecture/13-module-identity-rbac-tenancy.md §1) - a soft
+// delete (status: archived), gated by organization:delete, the first
+// real Owner-only capability in this codebase (see
+// internal/rbac/domain/role.go's own comment).
+func ArchiveOrganizationHandler(svc *application.ArchiveOrganizationService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		org, err := svc.Execute(r.Context(), application.ArchiveOrganizationInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+		})
+		if err != nil {
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires organization:delete")
+				return
+			}
+			if errors.Is(err, domain.ErrOrganizationNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
+				return
+			}
+			if errors.Is(err, domain.ErrOrganizationAlreadyArchived) {
+				httpserver.WriteProblem(w, http.StatusConflict, "organization is already archived", "")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to archive organization", "")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(toOrganizationResponse(org))
 	}
 }

@@ -102,7 +102,7 @@ func CancelRunHandler(svc *application.CancelRunService) http.HandlerFunc {
 			return
 		}
 
-		run, err := svc.Execute(r.Context(), r.PathValue("id"), r.PathValue("workspaceID"), r.PathValue("runID"), userID)
+		run, err := svc.Execute(r.Context(), r.PathValue("id"), r.PathValue("projectID"), r.PathValue("workspaceID"), r.PathValue("runID"), userID)
 		if err != nil {
 			writeExecutionError(w, err, "run not found")
 			return

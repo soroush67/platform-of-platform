@@ -77,6 +77,10 @@ func CreateProjectHandler(svc *application.CreateProjectService) http.HandlerFun
 				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
 				return
 			}
+			if errors.Is(err, domain.ErrOrganizationArchived) {
+				httpserver.WriteProblem(w, http.StatusConflict, "organization is archived", "")
+				return
+			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to create project", "")
 			return
 		}

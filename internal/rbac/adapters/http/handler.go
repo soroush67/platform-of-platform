@@ -1,0 +1,210 @@
+// Package http is the RBAC context's REST adapter -
+// docs/architecture/13-module-identity-rbac-tenancy.md §3's
+// custom-role/role-binding endpoints, previously entirely unbuilt (every
+// gated action elsewhere called straight into the postgres adapter as a
+// cross-context port; this is RBAC's own first-class surface).
+package http
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"platform-of-platform/internal/platform/httpserver"
+	"platform-of-platform/internal/rbac/application"
+	"platform-of-platform/internal/rbac/domain"
+)
+
+func writeRBACError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, domain.ErrForbidden):
+		httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "")
+	case errors.Is(err, domain.ErrRoleNotFound):
+		httpserver.WriteProblem(w, http.StatusNotFound, "role not found", "")
+	case errors.Is(err, domain.ErrRoleAlreadyExists):
+		httpserver.WriteProblem(w, http.StatusConflict, "role already exists", err.Error())
+	default:
+		var validationErr *domain.ValidationError
+		if errors.As(err, &validationErr) {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "validation failed", validationErr.Error())
+			return
+		}
+		httpserver.WriteProblem(w, http.StatusInternalServerError, "internal error", "")
+	}
+}
+
+type createRoleRequest struct {
+	Name        string   `json:"name"`
+	Permissions []string `json:"permissions"`
+}
+
+type roleResponse struct {
+	ID             string   `json:"id"`
+	OrganizationID *string  `json:"organization_id"`
+	Name           string   `json:"name"`
+	Permissions    []string `json:"permissions"`
+}
+
+func toRoleResponse(r *domain.Role) roleResponse {
+	permissions := make([]string, len(r.Permissions))
+	for i, p := range r.Permissions {
+		permissions[i] = string(p)
+	}
+	return roleResponse{ID: r.ID, OrganizationID: r.OrganizationID, Name: r.Name, Permissions: permissions}
+}
+
+// CreateRoleHandler implements `POST /orgs/{org}/roles`.
+func CreateRoleHandler(svc *application.CreateRoleService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req createRoleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		role, err := svc.Execute(r.Context(), application.CreateRoleInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			Name:             req.Name,
+			Permissions:      req.Permissions,
+		})
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(toRoleResponse(role))
+	}
+}
+
+// ListRolesHandler implements `GET /orgs/{org}/roles`.
+func ListRolesHandler(svc *application.ListRolesService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		roles, err := svc.Execute(r.Context(), r.PathValue("id"), userID)
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+
+		responses := make([]roleResponse, 0, len(roles))
+		for _, role := range roles {
+			responses = append(responses, toRoleResponse(role))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+	}
+}
+
+type subjectRef struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+type scopeRef struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+type createRoleBindingRequest struct {
+	RoleID  string     `json:"role_id"`
+	Subject subjectRef `json:"subject"`
+	Scope   scopeRef   `json:"scope"`
+}
+
+type roleBindingResponse struct {
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	RoleID         string `json:"role_id"`
+	SubjectType    string `json:"subject_type"`
+	SubjectID      string `json:"subject_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	CreatedAt      string `json:"created_at"`
+}
+
+func toRoleBindingResponse(b *domain.RoleBinding) roleBindingResponse {
+	return roleBindingResponse{
+		ID: b.ID, OrganizationID: b.OrganizationID, RoleID: b.RoleID,
+		SubjectType: b.SubjectType, SubjectID: b.SubjectID,
+		ScopeType: b.ScopeType, ScopeID: b.ScopeID,
+		CreatedAt: b.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+// CreateRoleBindingHandler implements `POST /orgs/{org}/role-bindings`.
+func CreateRoleBindingHandler(svc *application.CreateRoleBindingService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req createRoleBindingRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		binding, err := svc.Execute(r.Context(), application.CreateRoleBindingInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			RoleID:           req.RoleID,
+			SubjectType:      req.Subject.Type,
+			SubjectID:        req.Subject.ID,
+			ScopeType:        req.Scope.Type,
+			ScopeID:          req.Scope.ID,
+		})
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(toRoleBindingResponse(binding))
+	}
+}
+
+// ListRoleBindingsHandler implements
+// `GET /orgs/{org}/role-bindings?subject_id=...`.
+func ListRoleBindingsHandler(svc *application.ListRoleBindingsService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		bindings, err := svc.Execute(r.Context(), r.PathValue("id"), r.URL.Query().Get("subject_id"), userID)
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+
+		responses := make([]roleBindingResponse, 0, len(bindings))
+		for _, b := range bindings {
+			responses = append(responses, toRoleBindingResponse(b))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+	}
+}

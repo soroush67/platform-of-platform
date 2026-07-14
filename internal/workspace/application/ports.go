@@ -35,6 +35,18 @@ type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
 
+// ScopedPermissionChecker - same reasoning as execution's own copy
+// (internal/execution/application/ports.go): a RoleBinding at project
+// scope should grant workspace:manage for Workspaces/Environments
+// created under that project, not just an organization-scope binding.
+// CreateWorkspaceService/CreateEnvironmentService pass projectID with a
+// nil workspaceID (the Workspace/Environment doesn't exist yet at the
+// point permission is checked - there's nothing narrower than project
+// to check against).
+type ScopedPermissionChecker interface {
+	HasPermissionAtScope(ctx context.Context, organizationID, userID, permission string, projectID, workspaceID *string) (bool, error)
+}
+
 // ProjectChecker is this context's port into Tenancy specifically for
 // "does this project genuinely belong to this org" - Workspace/
 // Environment both reference project_id, and that reference needs to be

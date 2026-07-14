@@ -27,11 +27,11 @@ type CreateWorkspaceService struct {
 	repo            WorkspaceRepository
 	environmentRepo EnvironmentRepository
 	membership      MembershipChecker
-	permChecker     PermissionChecker
+	permChecker     ScopedPermissionChecker
 	projectChecker  ProjectChecker
 }
 
-func NewCreateWorkspaceService(repo WorkspaceRepository, environmentRepo EnvironmentRepository, membership MembershipChecker, permChecker PermissionChecker, projectChecker ProjectChecker) *CreateWorkspaceService {
+func NewCreateWorkspaceService(repo WorkspaceRepository, environmentRepo EnvironmentRepository, membership MembershipChecker, permChecker ScopedPermissionChecker, projectChecker ProjectChecker) *CreateWorkspaceService {
 	return &CreateWorkspaceService{repo: repo, environmentRepo: environmentRepo, membership: membership, permChecker: permChecker, projectChecker: projectChecker}
 }
 
@@ -59,7 +59,7 @@ func (s *CreateWorkspaceService) Execute(ctx context.Context, in CreateWorkspace
 		return nil, domain.ErrProjectNotFound
 	}
 
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionWorkspaceManage)
+	allowed, err := s.permChecker.HasPermissionAtScope(ctx, in.OrganizationID, in.RequestingUserID, permissionWorkspaceManage, &in.ProjectID, nil)
 	if err != nil {
 		return nil, err
 	}

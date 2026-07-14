@@ -40,16 +40,55 @@ func (e *ValidationError) Error() string { return e.Message }
 // §1's own reasoning for why slugs, not UUIDs, appear in URLs).
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+const (
+	OrganizationStatusActive   = "active"
+	OrganizationStatusArchived = "archived"
+)
+
+// ErrOrganizationAlreadyArchived - Archive() is not idempotent-as-success
+// the way some domain transitions in this codebase are (e.g. a duplicate
+// outbox redelivery) - archiving an already-archived org is a genuine
+// caller mistake (double DELETE), not a benign no-op, so it's surfaced
+// rather than silently swallowed.
+var ErrOrganizationAlreadyArchived = errors.New("organization is already archived")
+
+// ErrOrganizationArchived - distinct from ErrForbidden: the requester
+// *is* allowed to create a project here, there's just nowhere left to
+// put it (same "the action is fine, the resource state isn't" shape as
+// execution's own ErrWorkspaceLocked, mapped to 409, not 403/400).
+var ErrOrganizationArchived = errors.New("organization is archived")
+
 // Organization is the Tenancy context's aggregate root - top of the
 // containment hierarchy every other aggregate resolves to
-// (docs/architecture/03-domain-model.md §2).
+// (docs/architecture/03-domain-model.md §2). Status/ArchivedAt implement
+// docs/architecture/13-module-identity-rbac-tenancy.md §1's "DELETE
+// /orgs/{org} sets status: archived... schedules a background purge job
+// 30 days out" - only the soft-delete half is built here (the purge
+// reaper is a real, separate, not-yet-built piece, flagged rather than
+// silently assumed).
 type Organization struct {
-	ID        string
-	Name      string
-	Slug      string
-	Settings  map[string]any
-	Quota     map[string]any
-	CreatedAt time.Time
+	ID         string
+	Name       string
+	Slug       string
+	Settings   map[string]any
+	Quota      map[string]any
+	Status     string
+	ArchivedAt *time.Time
+	CreatedAt  time.Time
+}
+
+// Archive is the domain-level transition ArchiveOrganizationService
+// drives - gated by the caller's own organization:delete permission
+// check (RBAC's job, not this method's), this only enforces the
+// structural invariant: an org can only be archived once.
+func (o *Organization) Archive() error {
+	if o.Status == OrganizationStatusArchived {
+		return ErrOrganizationAlreadyArchived
+	}
+	now := time.Now().UTC()
+	o.Status = OrganizationStatusArchived
+	o.ArchivedAt = &now
+	return nil
 }
 
 // NewOrganization constructs an Organization, enforcing the invariants a
@@ -71,6 +110,7 @@ func NewOrganization(name, slug string) (*Organization, error) {
 		Slug:      slug,
 		Settings:  map[string]any{},
 		Quota:     map[string]any{},
+		Status:    OrganizationStatusActive,
 		CreatedAt: time.Now().UTC(),
 	}, nil
 }

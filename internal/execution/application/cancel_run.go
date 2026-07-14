@@ -12,16 +12,16 @@ import (
 type CancelRunService struct {
 	runRepo  RunRepository
 	locker   WorkspaceLocker
-	perm     PermissionChecker
+	perm     ScopedPermissionChecker
 	canceler WorkerCanceler
 }
 
-func NewCancelRunService(runRepo RunRepository, locker WorkspaceLocker, perm PermissionChecker, canceler WorkerCanceler) *CancelRunService {
+func NewCancelRunService(runRepo RunRepository, locker WorkspaceLocker, perm ScopedPermissionChecker, canceler WorkerCanceler) *CancelRunService {
 	return &CancelRunService{runRepo: runRepo, locker: locker, perm: perm, canceler: canceler}
 }
 
-func (s *CancelRunService) Execute(ctx context.Context, organizationID, workspaceID, runID, requestingUserID string) (*domain.Run, error) {
-	allowed, err := s.perm.HasPermission(ctx, organizationID, requestingUserID, permissionWorkspaceApply)
+func (s *CancelRunService) Execute(ctx context.Context, organizationID, projectID, workspaceID, runID, requestingUserID string) (*domain.Run, error) {
+	allowed, err := s.perm.HasPermissionAtScope(ctx, organizationID, requestingUserID, permissionWorkspaceApply, &projectID, &workspaceID)
 	if err != nil {
 		return nil, err
 	}

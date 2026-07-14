@@ -70,6 +70,18 @@ type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
 
+// ScopedPermissionChecker is the RBAC-at-project/workspace-scope port
+// (docs/architecture/03-domain-model.md §4's "a binding at a higher
+// scope implies the grant at every resource beneath it") -
+// TriggerRunService/CancelRunService use this instead of the plain
+// PermissionChecker above so a RoleBinding at workspace or project
+// scope (not just organization) actually grants workspace:apply. nil
+// projectID/workspaceID mean "don't check that level" - both non-nil
+// here since a Run always has both.
+type ScopedPermissionChecker interface {
+	HasPermissionAtScope(ctx context.Context, organizationID, userID, permission string, projectID, workspaceID *string) (bool, error)
+}
+
 // WorkspaceEngineReader is RunDispatchService's own port into Workspace -
 // it needs the Workspace's ExecutionEngine to pick a matching connected
 // Worker, and nothing else about the Workspace, so it asks for exactly

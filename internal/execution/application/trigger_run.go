@@ -21,10 +21,10 @@ type TriggerRunService struct {
 	runRepo          RunRepository
 	locker           WorkspaceLocker
 	workspaceChecker WorkspaceChecker
-	permChecker      PermissionChecker
+	permChecker      ScopedPermissionChecker
 }
 
-func NewTriggerRunService(runRepo RunRepository, locker WorkspaceLocker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker) *TriggerRunService {
+func NewTriggerRunService(runRepo RunRepository, locker WorkspaceLocker, workspaceChecker WorkspaceChecker, permChecker ScopedPermissionChecker) *TriggerRunService {
 	return &TriggerRunService{runRepo: runRepo, locker: locker, workspaceChecker: workspaceChecker, permChecker: permChecker}
 }
 
@@ -37,7 +37,7 @@ func (s *TriggerRunService) Execute(ctx context.Context, in TriggerRunInput) (*d
 		return nil, domain.ErrWorkspaceNotFound
 	}
 
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionWorkspaceApply)
+	allowed, err := s.permChecker.HasPermissionAtScope(ctx, in.OrganizationID, in.RequestingUserID, permissionWorkspaceApply, &in.ProjectID, &in.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}

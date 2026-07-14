@@ -55,8 +55,8 @@ func (r *OrganizationRepository) Create(ctx context.Context, org *domain.Organiz
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO organizations (id, name, slug, settings, quota, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		org.ID, org.Name, org.Slug, settings, quota, org.CreatedAt,
+		`INSERT INTO organizations (id, name, slug, settings, quota, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		org.ID, org.Name, org.Slug, settings, quota, org.Status, org.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -104,9 +104,9 @@ func (r *OrganizationRepository) GetByID(ctx context.Context, id string) (*domai
 	var org domain.Organization
 	var settings, quota []byte
 	err = tx.QueryRow(ctx,
-		`SELECT id, name, slug, settings, quota, created_at FROM organizations WHERE id = $1`,
+		`SELECT id, name, slug, settings, quota, status, archived_at, created_at FROM organizations WHERE id = $1`,
 		id,
-	).Scan(&org.ID, &org.Name, &org.Slug, &settings, &quota, &org.CreatedAt)
+	).Scan(&org.ID, &org.Name, &org.Slug, &settings, &quota, &org.Status, &org.ArchivedAt, &org.CreatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrOrganizationNotFound
@@ -122,4 +122,40 @@ func (r *OrganizationRepository) GetByID(ctx context.Context, id string) (*domai
 	}
 
 	return &org, tx.Commit(ctx)
+}
+
+// Archive implements docs/architecture/13-module-identity-rbac-tenancy.md
+// §1's "DELETE /orgs/{org} sets status: archived" - a real UPDATE, not a
+// row delete, so every foreign key into this org (RLS, Audit, every
+// other context's organization_id) stays resolvable, matching the exact
+// reasoning that doc section gives for why this can't be a hard DELETE.
+func (r *OrganizationRepository) Archive(ctx context.Context, org *domain.Organization, archivedByUserID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, org.ID); err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		`UPDATE organizations SET status = $2, archived_at = $3 WHERE id = $1`,
+		org.ID, org.Status, org.ArchivedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	err = outbox.Write(ctx, tx, org.ID, "OrganizationArchived", map[string]any{
+		"actor":       archivedByUserID,
+		"target_type": "organization",
+		"target_id":   org.ID,
+	})
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
