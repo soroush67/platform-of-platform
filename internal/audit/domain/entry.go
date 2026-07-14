@@ -22,18 +22,27 @@ var ErrForbidden = errors.New("forbidden")
 type Entry struct {
 	ID             string
 	OrganizationID string
-	Actor          string // real user id, or the literal "system"
-	Action         string
-	TargetType     string
-	TargetID       string
-	Metadata       map[string]any
-	CreatedAt      time.Time
+	// SourceEventID ties this entry back to the exact outbox_events row
+	// that produced it - a natural idempotency key (migrations/
+	// 0008_audit_idempotency.up.sql's own UNIQUE constraint), not an
+	// invented one: the Relay's at-least-once delivery means the same
+	// event can call RecordEntryService.HandleEvent more than once, and
+	// this is what makes a redelivery a safe no-op instead of a
+	// duplicate entry.
+	SourceEventID string
+	Actor         string // real user id, or the literal "system"
+	Action        string
+	TargetType    string
+	TargetID      string
+	Metadata      map[string]any
+	CreatedAt     time.Time
 }
 
-func NewEntry(organizationID, actor, action, targetType, targetID string, metadata map[string]any) *Entry {
+func NewEntry(organizationID, sourceEventID, actor, action, targetType, targetID string, metadata map[string]any) *Entry {
 	return &Entry{
 		ID:             uuid.NewString(),
 		OrganizationID: organizationID,
+		SourceEventID:  sourceEventID,
 		Actor:          actor,
 		Action:         action,
 		TargetType:     targetType,

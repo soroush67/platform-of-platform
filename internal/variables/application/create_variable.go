@@ -30,27 +30,37 @@ type CreateVariableInput struct {
 
 type CreateVariableService struct {
 	repo               VariableRepository
+	membership         MembershipChecker
 	projectChecker     ProjectChecker
 	environmentChecker EnvironmentChecker
 	workspaceChecker   WorkspaceChecker
 	permChecker        PermissionChecker
 }
 
-func NewCreateVariableService(repo VariableRepository, projectChecker ProjectChecker, environmentChecker EnvironmentChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker) *CreateVariableService {
+func NewCreateVariableService(repo VariableRepository, membership MembershipChecker, projectChecker ProjectChecker, environmentChecker EnvironmentChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker) *CreateVariableService {
 	return &CreateVariableService{
-		repo: repo, projectChecker: projectChecker, environmentChecker: environmentChecker,
+		repo: repo, membership: membership, projectChecker: projectChecker, environmentChecker: environmentChecker,
 		workspaceChecker: workspaceChecker, permChecker: permChecker,
 	}
 }
 
 func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableInput) (*domain.Variable, error) {
-	// Validate the scope shape first (domain construction), then verify
-	// the scope_id actually resolves to something real, then check
-	// permission - same ordering already used by every other
-	// "creates a resource under a parent" service in this codebase.
+	// Validate the scope shape first (domain construction), then check
+	// membership (a non-member gets "scope not found," not a 403 - same
+	// ordering fix now applied to every Create*Service in this
+	// codebase), then verify the scope_id actually resolves to something
+	// real, then check permission.
 	v, err := domain.NewVariable(in.OrganizationID, in.ScopeType, in.ScopeID, in.Key, in.Category, in.Sensitivity, in.Value)
 	if err != nil {
 		return nil, err
+	}
+
+	isMember, err := s.membership.IsMember(ctx, in.OrganizationID, in.RequestingUserID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, domain.ErrScopeNotFound
 	}
 
 	scopeExists, requiredPermission, err := s.resolveScope(ctx, in)

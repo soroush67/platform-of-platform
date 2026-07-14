@@ -59,8 +59,8 @@ func (s ScopeType) valid() bool {
 type Category string
 
 const (
-	CategoryEnvVar      Category = "env_var"
-	CategoryEngineVar   Category = "engine_var"
+	CategoryEnvVar       Category = "env_var"
+	CategoryEngineVar    Category = "engine_var"
 	CategoryFileTemplate Category = "file_template"
 )
 

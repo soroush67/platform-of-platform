@@ -50,6 +50,16 @@ type RoleAssigner interface {
 	AssignRole(ctx context.Context, organizationID, userID, roleName string) error
 }
 
+// RoleChanger is distinct from RoleAssigner - AssignRole is additive
+// (bootstrapping the first role a member ever gets, at org-creation or
+// add-member time), RoleChanger.ReplaceRole is real "this member now has
+// exactly this role, not that one" semantics (see the rbac postgres
+// adapter's own comment on why AssignRole alone can't safely be reused
+// for a change operation).
+type RoleChanger interface {
+	ReplaceRole(ctx context.Context, organizationID, userID, roleName string) error
+}
+
 type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }

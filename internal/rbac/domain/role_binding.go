@@ -28,7 +28,13 @@ type RoleBinding struct {
 	CreatedAt      time.Time
 }
 
-func NewOrganizationOwnerBinding(organizationID, roleID, userID string) *RoleBinding {
+// NewOrganizationScopeBinding constructs a binding at organization scope
+// for any role - despite this function's former name
+// (NewOrganizationOwnerBinding), it was already used generically for
+// every built-in role (AssignRole's own "read" default in
+// add_member.go, not just "owner"); renamed to describe what it
+// actually does, not what its first caller happened to be for.
+func NewOrganizationScopeBinding(organizationID, roleID, userID string) *RoleBinding {
 	return &RoleBinding{
 		ID:             uuid.NewString(),
 		OrganizationID: organizationID,

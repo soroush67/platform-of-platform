@@ -73,6 +73,10 @@ func CreateProjectHandler(svc *application.CreateProjectService) http.HandlerFun
 				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires organization:manage")
 				return
 			}
+			if errors.Is(err, domain.ErrOrganizationNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
+				return
+			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to create project", "")
 			return
 		}

@@ -21,16 +21,8 @@ type AddMemberInput struct {
 
 // AddMemberService implements `POST /api/v1/orgs/{id}/members`. New
 // members are granted the built-in "read" role by default - promoting
-// someone to write/admin/owner is a real, later feature (a role-change
-// endpoint), not built here; this only proves the permission-check path
-// end to end for the one write action this walking skeleton actually has.
-//
-// Known simplification: HasPermission returning false doesn't distinguish
-// "you're a member but your role lacks organization:manage" from "you
-// aren't a member of this org at all" - both map to a flat 403 below,
-// unlike GetOrganizationService's 404-for-non-members. A stricter version
-// would 404 the second case too (same "don't reveal existence" reasoning),
-// deferred here rather than built speculatively.
+// someone past that is ChangeMemberRoleService's job
+// (change_member_role.go), a real endpoint now, not a deferred gap.
 type AddMemberService struct {
 	membershipRepo MembershipRepository
 	permChecker    PermissionChecker
@@ -42,6 +34,20 @@ func NewAddMemberService(membershipRepo MembershipRepository, permChecker Permis
 }
 
 func (s *AddMemberService) Execute(ctx context.Context, in AddMemberInput) error {
+	// Membership checked first - a non-member requester gets the same
+	// 404 a nonexistent org would give (via the HTTP layer mapping
+	// ErrOrganizationNotFound), not a 403 that would confirm the org is
+	// real. This used to be a documented gap (both cases flattened to
+	// 403); fixed here the same way every other Create*Service in this
+	// codebase now orders its checks.
+	isMember, err := s.membershipRepo.IsMember(ctx, in.OrganizationID, in.RequestingUserID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return domain.ErrOrganizationNotFound
+	}
+
 	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionOrganizationManage)
 	if err != nil {
 		return err

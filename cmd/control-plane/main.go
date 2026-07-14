@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
@@ -84,16 +84,17 @@ func main() {
 	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo)
 	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo, membershipRepo)
 	addMemberService := tenancyapp.NewAddMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
-	createProjectService := tenancyapp.NewCreateProjectService(projectRepo, roleBindingRepo)
+	changeMemberRoleService := tenancyapp.NewChangeMemberRoleService(membershipRepo, roleBindingRepo, roleBindingRepo)
+	createProjectService := tenancyapp.NewCreateProjectService(projectRepo, membershipRepo, roleBindingRepo)
 	listProjectsService := tenancyapp.NewListProjectsService(projectRepo, membershipRepo)
 	getProjectService := tenancyapp.NewGetProjectService(projectRepo, membershipRepo)
 
 	environmentRepo := workspacepg.NewEnvironmentRepository(pool)
 	workspaceRepo := workspacepg.NewWorkspaceRepository(pool)
-	createEnvironmentService := workspaceapp.NewCreateEnvironmentService(environmentRepo, roleBindingRepo, projectRepo)
+	createEnvironmentService := workspaceapp.NewCreateEnvironmentService(environmentRepo, membershipRepo, roleBindingRepo, projectRepo)
 	listEnvironmentsService := workspaceapp.NewListEnvironmentsService(environmentRepo, membershipRepo, projectRepo)
 	getEnvironmentService := workspaceapp.NewGetEnvironmentService(environmentRepo, membershipRepo, projectRepo)
-	createWorkspaceService := workspaceapp.NewCreateWorkspaceService(workspaceRepo, roleBindingRepo, projectRepo)
+	createWorkspaceService := workspaceapp.NewCreateWorkspaceService(workspaceRepo, environmentRepo, membershipRepo, roleBindingRepo, projectRepo)
 	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo)
 	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo)
 
@@ -104,7 +105,7 @@ func main() {
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
 
 	variableRepo := variablespg.NewVariableRepository(pool)
-	createVariableService := variablesapp.NewCreateVariableService(variableRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo)
+	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo)
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
 
@@ -124,6 +125,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateOrganizationHandler(createOrgService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetOrganizationHandler(getOrgService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.AddMemberHandler(addMemberService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/role", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ChangeMemberRoleHandler(changeMemberRoleService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateProjectHandler(createProjectService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ListProjectsHandler(listProjectsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetProjectHandler(getProjectService)))

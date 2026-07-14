@@ -21,20 +21,20 @@ type createVariableRequest struct {
 }
 
 type variableResponse struct {
-	ID             string  `json:"id"`
-	OrganizationID string  `json:"organization_id"`
-	ScopeType      string  `json:"scope_type"`
-	ScopeID        string  `json:"scope_id"`
-	Key            string  `json:"key"`
-	Category       string  `json:"category"`
-	Sensitivity    string  `json:"sensitivity"`
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	Key            string `json:"key"`
+	Category       string `json:"category"`
+	Sensitivity    string `json:"sensitivity"`
 	// Value is a pointer so a sensitive variable serializes it as JSON
 	// null instead of an empty string - distinguishable from "the value
 	// genuinely is empty," which a plain "" would hide. Same masking
 	// posture this operator's own compose-platform already established
 	// this session for sensitive values.
-	Value *string `json:"value"`
-	CreatedAt string `json:"created_at"`
+	Value     *string `json:"value"`
+	CreatedAt string  `json:"created_at"`
 }
 
 func toVariableResponse(v *domain.Variable) variableResponse {

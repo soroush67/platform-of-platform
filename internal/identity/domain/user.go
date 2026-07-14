@@ -48,14 +48,14 @@ var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 // itself org-scoped), per docs/architecture/03-domain-model.md §3. No
 // RLS on the users table for the same reason - see migrations/0001_init.up.sql.
 type User struct {
-	ID           string
-	Username     string
-	Email        string
-	AuthSource   AuthSource
-	ExternalID   *string
-	Status       string
-	MFAEnrolled  bool
-	CreatedAt    time.Time
+	ID          string
+	Username    string
+	Email       string
+	AuthSource  AuthSource
+	ExternalID  *string
+	Status      string
+	MFAEnrolled bool
+	CreatedAt   time.Time
 	// PasswordHash is a bcrypt hash, never a plaintext password - the
 	// domain layer never sees or handles plaintext (Stage 18 §1's "pure
 	// Go, zero third-party imports" rule for /domain means bcrypt itself

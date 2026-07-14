@@ -17,14 +17,14 @@ type createWorkspaceRequest struct {
 }
 
 type workspaceResponse struct {
-	ID                    string  `json:"id"`
-	OrganizationID        string  `json:"organization_id"`
-	ProjectID             string  `json:"project_id"`
-	EnvironmentID         *string `json:"environment_id,omitempty"`
-	Name                  string  `json:"name"`
-	ExecutionEngine       string  `json:"execution_engine"`
-	Locked                bool    `json:"locked"`
-	CreatedAt             string  `json:"created_at"`
+	ID              string  `json:"id"`
+	OrganizationID  string  `json:"organization_id"`
+	ProjectID       string  `json:"project_id"`
+	EnvironmentID   *string `json:"environment_id,omitempty"`
+	Name            string  `json:"name"`
+	ExecutionEngine string  `json:"execution_engine"`
+	Locked          bool    `json:"locked"`
+	CreatedAt       string  `json:"created_at"`
 }
 
 func toWorkspaceResponse(w *domain.Workspace) workspaceResponse {

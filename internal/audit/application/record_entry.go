@@ -43,7 +43,7 @@ func (s *RecordEntryService) HandleEvent(ctx context.Context, event outbox.Event
 	targetType, _ := payload["target_type"].(string)
 	targetID, _ := payload["target_id"].(string)
 
-	entry := domain.NewEntry(event.OrganizationID, actor, event.EventType, targetType, targetID, payload)
+	entry := domain.NewEntry(event.OrganizationID, event.ID, actor, event.EventType, targetType, targetID, payload)
 
 	return s.repo.Create(ctx, entry)
 }

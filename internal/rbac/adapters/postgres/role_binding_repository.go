@@ -41,7 +41,54 @@ func (r *RoleBindingRepository) AssignRole(ctx context.Context, organizationID, 
 		return err
 	}
 
-	binding := domain.NewOrganizationOwnerBinding(organizationID, roleID, userID)
+	binding := domain.NewOrganizationScopeBinding(organizationID, roleID, userID)
+	_, err = tx.Exec(ctx,
+		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.CreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// ReplaceRole is real "change this member's role" semantics - AssignRole
+// alone is additive (a second call binds a *second* role, and since
+// HasPermission is an OR across every matching binding, the old role's
+// permissions would keep applying too, not actually change anything).
+// This deletes any existing organization-scope binding for the user
+// first, then inserts the new one, atomically in one transaction - a
+// member genuinely has exactly one role at organization scope after
+// this call, not a growing accumulation of every role they were ever
+// assigned.
+func (r *RoleBindingRepository) ReplaceRole(ctx context.Context, organizationID, userID, roleName string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	var roleID string
+	err = tx.QueryRow(ctx, `SELECT id FROM roles WHERE name = $1 AND organization_id IS NULL`, roleName).Scan(&roleID)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		`DELETE FROM role_bindings WHERE organization_id = $1 AND subject_type = 'user' AND subject_id = $2 AND scope_type = 'organization' AND scope_id = $1`,
+		organizationID, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	binding := domain.NewOrganizationScopeBinding(organizationID, roleID, userID)
 	_, err = tx.Exec(ctx,
 		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,

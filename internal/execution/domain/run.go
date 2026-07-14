@@ -40,16 +40,16 @@ func (e *ValidationError) Error() string { return e.Message }
 type RunStatus string
 
 const (
-	RunStatusQueued            RunStatus = "queued"
-	RunStatusPlanning          RunStatus = "planning"
-	RunStatusPlanned           RunStatus = "planned"
-	RunStatusPolicyCheck       RunStatus = "policy_check"
-	RunStatusAwaitingApproval  RunStatus = "awaiting_approval"
-	RunStatusApplying          RunStatus = "applying"
-	RunStatusApplied           RunStatus = "applied"
-	RunStatusFailed            RunStatus = "failed"
-	RunStatusErrored           RunStatus = "errored"
-	RunStatusCanceled          RunStatus = "canceled"
+	RunStatusQueued           RunStatus = "queued"
+	RunStatusPlanning         RunStatus = "planning"
+	RunStatusPlanned          RunStatus = "planned"
+	RunStatusPolicyCheck      RunStatus = "policy_check"
+	RunStatusAwaitingApproval RunStatus = "awaiting_approval"
+	RunStatusApplying         RunStatus = "applying"
+	RunStatusApplied          RunStatus = "applied"
+	RunStatusFailed           RunStatus = "failed"
+	RunStatusErrored          RunStatus = "errored"
+	RunStatusCanceled         RunStatus = "canceled"
 )
 
 func (s RunStatus) IsTerminal() bool {

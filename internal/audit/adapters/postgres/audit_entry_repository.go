@@ -39,10 +39,15 @@ func (r *AuditEntryRepository) Create(ctx context.Context, entry *domain.Entry) 
 		return err
 	}
 
+	// ON CONFLICT (source_event_id) DO NOTHING is what makes a redelivered
+	// event (the Relay's own at-least-once guarantee) a safe no-op instead
+	// of a duplicate row - migrations/0008_audit_idempotency.up.sql's
+	// whole reason to exist.
 	_, err = tx.Exec(ctx,
-		`INSERT INTO audit_entries (id, organization_id, actor, action, target_type, target_id, metadata, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		entry.ID, entry.OrganizationID, entry.Actor, entry.Action, entry.TargetType, entry.TargetID, metadata, entry.CreatedAt,
+		`INSERT INTO audit_entries (id, organization_id, source_event_id, actor, action, target_type, target_id, metadata, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		 ON CONFLICT (source_event_id) DO NOTHING`,
+		entry.ID, entry.OrganizationID, entry.SourceEventID, entry.Actor, entry.Action, entry.TargetType, entry.TargetID, metadata, entry.CreatedAt,
 	)
 	if err != nil {
 		return err

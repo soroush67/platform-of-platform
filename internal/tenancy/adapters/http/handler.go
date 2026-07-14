@@ -127,7 +127,60 @@ func AddMemberHandler(svc *application.AddMemberService) http.HandlerFunc {
 				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires organization:manage")
 				return
 			}
+			if errors.Is(err, domain.ErrOrganizationNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
+				return
+			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to add member", "")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type changeMemberRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// ChangeMemberRoleHandler implements
+// PUT /api/v1/orgs/{id}/members/{userID}/role. Registered behind
+// httpserver.RequireAuth in main.go.
+func ChangeMemberRoleHandler(svc *application.ChangeMemberRoleService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req changeMemberRoleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.ChangeMemberRoleInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			TargetUserID:     r.PathValue("userID"),
+			RoleName:         req.Role,
+		})
+		if err != nil {
+			var validationErr *domain.ValidationError
+			if errors.As(err, &validationErr) {
+				httpserver.WriteProblem(w, http.StatusBadRequest, "validation failed", validationErr.Error())
+				return
+			}
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires organization:manage")
+				return
+			}
+			if errors.Is(err, domain.ErrOrganizationNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "organization or member not found", "")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to change member role", "")
 			return
 		}
 

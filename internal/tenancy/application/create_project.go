@@ -26,15 +26,28 @@ type CreateProjectInput struct {
 }
 
 type CreateProjectService struct {
-	repo        ProjectRepository
-	permChecker PermissionChecker
+	repo           ProjectRepository
+	membershipRepo MembershipRepository
+	permChecker    PermissionChecker
 }
 
-func NewCreateProjectService(repo ProjectRepository, permChecker PermissionChecker) *CreateProjectService {
-	return &CreateProjectService{repo: repo, permChecker: permChecker}
+func NewCreateProjectService(repo ProjectRepository, membershipRepo MembershipRepository, permChecker PermissionChecker) *CreateProjectService {
+	return &CreateProjectService{repo: repo, membershipRepo: membershipRepo, permChecker: permChecker}
 }
 
 func (s *CreateProjectService) Execute(ctx context.Context, in CreateProjectInput) (*domain.Project, error) {
+	// Membership checked first - see GetOrganizationService's own
+	// comment on the "don't reveal existence" reasoning this mirrors: a
+	// non-member gets the same 404 a nonexistent org id would, not a 403
+	// that would confirm the org is real.
+	isMember, err := s.membershipRepo.IsMember(ctx, in.OrganizationID, in.RequestingUserID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, domain.ErrOrganizationNotFound
+	}
+
 	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionOrganizationManage)
 	if err != nil {
 		return nil, err
