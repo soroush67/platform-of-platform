@@ -1,0 +1,98 @@
+# Local/dev deployment - docs/architecture/21-deployment.md §1's topology,
+# trimmed to exactly what this codebase actually uses today: CockroachDB
+# (real 3-node cluster, per the operator's own "we need clustering
+# capability" instruction - not a single-node dev shortcut), the Control
+# Plane, and one Worker. NATS/Redis/MinIO are in the target architecture
+# but nothing in this codebase is wired to them yet - omitted rather than
+# included unused.
+services:
+  cockroach-0:
+    image: cockroachdb/cockroach:latest
+    command: ["start", "--insecure", "--join=cockroach-0,cockroach-1,cockroach-2"]
+    volumes: ["cockroach-0-data:/cockroach/cockroach-data"]
+
+  cockroach-1:
+    image: cockroachdb/cockroach:latest
+    command: ["start", "--insecure", "--join=cockroach-0,cockroach-1,cockroach-2"]
+    volumes: ["cockroach-1-data:/cockroach/cockroach-data"]
+
+  cockroach-2:
+    image: cockroachdb/cockroach:latest
+    command: ["start", "--insecure", "--join=cockroach-0,cockroach-1,cockroach-2"]
+    volumes: ["cockroach-2-data:/cockroach/cockroach-data"]
+
+  cockroach-init:
+    image: cockroachdb/cockroach:latest
+    # `cockroach init` itself isn't idempotent (a real gap found by
+    # actually re-running `docker-compose up` a second time, not
+    # assumed) - a restarted stack re-runs this one-shot service every
+    # time, so "already initialized" has to be treated as success too,
+    # not just the first-run "successfully initialized" message.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        ./cockroach init --insecure --host=cockroach-0 2>&1 | tee /tmp/init.log
+        grep -qE "Cluster successfully initialized|already been initialized" /tmp/init.log
+    depends_on: [cockroach-0, cockroach-1, cockroach-2]
+    restart: "no"
+
+  # One-shot: creates the `platform` database and the non-superuser
+  # `platform_app` role the Control Plane connects as
+  # (docs/architecture/05-database.md §1) - real bootstrap steps a fresh
+  # cluster needs before the Control Plane's own migrations can run.
+  cockroach-bootstrap:
+    image: cockroachdb/cockroach:latest
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        ./cockroach sql --insecure --host=cockroach-0 -e "CREATE DATABASE IF NOT EXISTS platform;" &&
+        ./cockroach sql --insecure --host=cockroach-0 -e "CREATE USER IF NOT EXISTS platform_app;"
+    depends_on:
+      cockroach-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile.control-plane
+    depends_on:
+      cockroach-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql://root@cockroach-0:26257/platform?sslmode=disable
+      APP_DATABASE_URL: postgresql://platform_app@cockroach-0:26257/platform?sslmode=disable
+      HTTP_ADDR: ":8443"
+      GRPC_ADDR: ":9000"
+      # Dev-only bootstrap secret (docs/architecture/21-deployment.md §1's
+      # own MASTER_KEY framing) - a real deployment sources this from a
+      # real secret store, not a compose file default.
+      JWT_SIGNING_KEY: "dev-only-signing-key-not-for-production"
+    ports:
+      - "8443:8443"
+      # Host-side 9100, not 9000 - this host already has an unrelated
+      # project (kubespray-webui) bound to 9000. Only the host-published
+      # port changes; the Worker talks to the Control Plane over the
+      # compose network's internal DNS (control-plane:9000), unaffected
+      # by this remap.
+      - "9100:9000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    depends_on: [control-plane]
+    environment:
+      CONTROL_PLANE_GRPC_ADDR: "control-plane:9000"
+      WORKER_ID: "worker-1"
+    volumes:
+      # DooD - same pattern this operator's compose-platform/kubespray-webui
+      # already use, and the only way this Worker's one real engine
+      # (compose) can actually run `docker-compose up` against the host's
+      # own Docker daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  cockroach-0-data:
+  cockroach-1-data:
+  cockroach-2-data:
