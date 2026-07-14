@@ -23,10 +23,28 @@ func NewWorkerReportService(runRepo RunRepository, locker WorkspaceLocker) *Work
 	return &WorkerReportService{runRepo: runRepo, locker: locker}
 }
 
-func (s *WorkerReportService) HandleReport(ctx context.Context, organizationID, runID, workspaceID, reportedStatus, errorMessage string) error {
+func (s *WorkerReportService) HandleReport(ctx context.Context, organizationID, runID, workspaceID, reportedStatus, logLine, errorMessage string) error {
 	run, err := s.runRepo.GetByID(ctx, organizationID, runID)
 	if err != nil {
 		return err
+	}
+
+	// ApplyOutputRef is documented (Stage 5 §6) as an object storage
+	// pointer to the real captured job output - this codebase has no
+	// object storage wired up yet (no State context, no MinIO), so the
+	// real docker-compose stdout+stderr the Worker captured (JobStatusReport's
+	// log_line) is stored inline here instead, a small and honestly-flagged
+	// simplification rather than a fabricated storage reference. This
+	// used to be silently dropped by this method (log_line was never
+	// even a parameter) - the only place the real output went was the
+	// Worker's own stdout, gone the moment that container exited.
+	output := logLine
+	if errorMessage != "" && errorMessage != logLine {
+		if output != "" {
+			output += "\n\nerror: " + errorMessage
+		} else {
+			output = errorMessage
+		}
 	}
 
 	switch reportedStatus {
@@ -47,16 +65,12 @@ func (s *WorkerReportService) HandleReport(ctx context.Context, organizationID, 
 			}
 			return err
 		}
-		// ApplyOutputRef is documented (Stage 5 §6) as an object storage
-		// pointer - this codebase has no object storage wired up yet (no
-		// State context, no MinIO), so the raw error text is stored
-		// inline here instead, a small and honestly-flagged
-		// simplification rather than a fabricated storage reference.
-		if errorMessage != "" {
-			run.ApplyOutputRef = &errorMessage
-		}
 	default:
 		return &domain.ValidationError{Message: "status must be one of applied, failed, errored"}
+	}
+
+	if output != "" {
+		run.ApplyOutputRef = &output
 	}
 
 	if err := s.runRepo.Update(ctx, run, "system"); err != nil {

@@ -15,7 +15,7 @@ import (
 // type (not importing execution/application's own interfaces here) so
 // this adapter package doesn't need to depend on the application
 // package just to declare the callback shape.
-type StatusReportHandler func(ctx context.Context, organizationID, runID, workspaceID, status, errorMessage string) error
+type StatusReportHandler func(ctx context.Context, organizationID, runID, workspaceID, status, logLine, errorMessage string) error
 
 type Server struct {
 	pb.UnimplementedWorkerServiceServer
@@ -62,7 +62,7 @@ func (s *Server) StreamJobs(req *pb.StreamJobsRequest, stream pb.WorkerService_S
 }
 
 func (s *Server) ReportJobStatus(ctx context.Context, report *pb.JobStatusReport) (*pb.Ack, error) {
-	if err := s.onStatusReport(ctx, report.OrganizationId, report.RunId, report.WorkspaceId, report.Status, report.ErrorMessage); err != nil {
+	if err := s.onStatusReport(ctx, report.OrganizationId, report.RunId, report.WorkspaceId, report.Status, report.LogLine, report.ErrorMessage); err != nil {
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
 	return &pb.Ack{Ok: true}, nil

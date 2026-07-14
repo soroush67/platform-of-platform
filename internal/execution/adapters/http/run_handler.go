@@ -20,6 +20,13 @@ type runResponse struct {
 	Status         string  `json:"status"`
 	CreatedAt      string  `json:"created_at"`
 	FinishedAt     *string `json:"finished_at,omitempty"`
+	// ApplyOutputRef: the real captured job output (docker-compose
+	// stdout+stderr, or the failure error text if the job never
+	// produced output) - see application.WorkerReportService.HandleReport
+	// for why this is inline text rather than a real object storage
+	// pointer. Was never surfaced via the API at all until now - the
+	// only place it existed was the Worker's own stdout.
+	ApplyOutputRef *string `json:"apply_output_ref,omitempty"`
 }
 
 func toRunResponse(r *domain.Run) runResponse {
@@ -31,6 +38,7 @@ func toRunResponse(r *domain.Run) runResponse {
 		TriggeredBy:    r.TriggeredBy,
 		Status:         string(r.Status),
 		CreatedAt:      r.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ApplyOutputRef: r.ApplyOutputRef,
 	}
 	if r.FinishedAt != nil {
 		formatted := r.FinishedAt.Format("2006-01-02T15:04:05Z07:00")
