@@ -16,6 +16,14 @@ import (
 // deliberately ambiguous between "doesn't exist" and "RLS hid it".
 var ErrOrganizationNotFound = errors.New("organization not found")
 
+// ErrForbidden is distinct from ErrOrganizationNotFound: it's for an
+// authenticated, *known-member* Principal attempting an action their
+// role doesn't grant (maps to HTTP 403) - unlike a non-member reading an
+// org (404, "don't reveal existence"), a member attempting an action
+// they lack permission for already knows the org exists, so there's
+// nothing left to hide by 404ing instead.
+var ErrForbidden = errors.New("forbidden")
+
 // ValidationError distinguishes "the caller sent something invalid" (maps
 // to HTTP 400 at the adapter boundary) from any other error (maps to 500) -
 // the domain layer names this distinction, the HTTP adapter is the only

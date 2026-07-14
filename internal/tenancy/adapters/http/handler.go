@@ -94,6 +94,47 @@ func GetOrganizationHandler(svc *application.GetOrganizationService) http.Handle
 	}
 }
 
+type addMemberRequest struct {
+	UserID string `json:"user_id"`
+}
+
+// AddMemberHandler implements POST /api/v1/orgs/{id}/members. Registered
+// behind httpserver.RequireAuth in main.go - the use case is what
+// actually checks organization:manage, not this handler.
+func AddMemberHandler(svc *application.AddMemberService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		orgID := r.PathValue("id")
+
+		var req addMemberRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.AddMemberInput{
+			OrganizationID:   orgID,
+			RequestingUserID: userID,
+			NewMemberUserID:  req.UserID,
+		})
+		if err != nil {
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires organization:manage")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to add member", "")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func toOrganizationResponse(org *domain.Organization) organizationResponse {
 	return organizationResponse{
 		ID:        org.ID,

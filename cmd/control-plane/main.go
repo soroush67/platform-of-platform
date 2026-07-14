@@ -26,6 +26,7 @@ import (
 	identityhttp "platform-of-platform/internal/identity/adapters/http"
 	identitypg "platform-of-platform/internal/identity/adapters/postgres"
 	identityapp "platform-of-platform/internal/identity/application"
+	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
 	tenancyapp "platform-of-platform/internal/tenancy/application"
@@ -52,12 +53,22 @@ func main() {
 	}
 	defer pool.Close()
 
+	roleRepo := rbacpg.NewRoleRepository(pool)
+	if err := roleRepo.SeedBuiltinRoles(context.Background()); err != nil {
+		logger.Error("role seeding failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("builtin roles seeded")
+
 	// Manual wiring, in one place - docs/architecture/18-backend-structure.md §5's
 	// "no DI framework" decision: every dependency is greppable from here.
+	roleBindingRepo := rbacpg.NewRoleBindingRepository(pool)
+
 	orgRepo := tenancypg.NewOrganizationRepository(pool)
 	membershipRepo := tenancypg.NewMembershipRepository(pool)
-	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo)
+	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo)
 	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo, membershipRepo)
+	addMemberService := tenancyapp.NewAddMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
 
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
@@ -69,6 +80,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateOrganizationHandler(createOrgService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetOrganizationHandler(getOrgService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.AddMemberHandler(addMemberService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,

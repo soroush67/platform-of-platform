@@ -33,3 +33,17 @@ type MembershipRepository interface {
 	// knows the id) but "is *this specific* user allowed to see it."
 	IsMember(ctx context.Context, organizationID, userID string) (bool, error)
 }
+
+// RoleAssigner and PermissionChecker are Tenancy's own ports into the
+// RBAC context, shaped for exactly what Tenancy needs - dependency
+// inversion per docs/architecture/18-backend-structure.md §3: Tenancy
+// doesn't import internal/rbac/domain at all, it declares the interface
+// it needs and the rbac postgres adapter happens to satisfy it
+// structurally (Go interfaces, no explicit "implements" wiring needed).
+type RoleAssigner interface {
+	AssignRole(ctx context.Context, organizationID, userID, roleName string) error
+}
+
+type PermissionChecker interface {
+	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
+}
