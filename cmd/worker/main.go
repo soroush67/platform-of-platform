@@ -10,8 +10,13 @@
 // the plugin-subprocess-over-Unix-socket second layer
 // (docs/architecture/17-workers.md §2) - this Worker executes the
 // compose engine in-process instead of launching a separate plugin
-// binary; per-job container isolation (§4) - this process itself runs
-// with docker.sock access, not each Job in its own sandboxed container;
+// binary; full per-job container isolation (§4) - this process reaches
+// Docker through docker-socket-proxy (docker-compose.yml), not a raw
+// mounted docker.sock, which blocks EXEC/BUILD/SWARM/SYSTEM/PLUGINS/
+// SECRETS/NODES/SERVICES entirely, but the proxy scopes by API endpoint
+// category, not by container ownership - one Job's compose still shares
+// the same container namespace as every other Job's (no nested-dind-
+// per-Job isolation, an explicit, discussed tradeoff, not an oversight);
 // and the other seven engine types (terraform, opentofu, ansible, helm,
 // packer, kubespray, kubernetes) - "compose" was chosen because it's
 // the one this operator has a real, already-proven deployment pattern
@@ -30,9 +35,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	pb "platform-of-platform/internal/execution/adapters/grpc/proto"
+	"platform-of-platform/internal/platform/mtls"
 )
 
 func main() {
@@ -40,16 +45,28 @@ func main() {
 
 	controlPlaneAddr := getenvDefault("CONTROL_PLANE_GRPC_ADDR", "control-plane:9000")
 	workerID := getenvDefault("WORKER_ID", "worker-1")
+	tlsServerName := getenvDefault("TLS_SERVER_NAME", "control-plane")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Insecure transport credentials - dev-only, same posture as this
-	// codebase's other bootstrap-secret shortcuts (JWT_SIGNING_KEY,
-	// CockroachDB --insecure) - a real deployment needs mTLS here
-	// (docs/architecture/17-workers.md's own worker identity token),
-	// not built in this walking skeleton.
-	conn, err := grpc.NewClient(controlPlaneAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// Real mTLS (internal/platform/mtls) - this Worker presents its own
+	// certificate (TLS_CLIENT_CERT/KEY, signed by the same dev CA the
+	// Control Plane trusts) and verifies the Control Plane's server
+	// certificate in turn. Replaces what used to be
+	// insecure.NewCredentials() - a Worker without a cert signed by this
+	// CA can no longer connect at all, not just "connects unencrypted."
+	tlsCreds, err := mtls.ClientCredentials(
+		getenvDefault("TLS_CA_CERT", "/certs/ca-cert.pem"),
+		getenvDefault("TLS_CLIENT_CERT", "/certs/worker-cert.pem"),
+		getenvDefault("TLS_CLIENT_KEY", "/certs/worker-key.pem"),
+		tlsServerName,
+	)
+	if err != nil {
+		logger.Error("mtls setup failed", "error", err)
+		os.Exit(1)
+	}
+	conn, err := grpc.NewClient(controlPlaneAddr, grpc.WithTransportCredentials(tlsCreds))
 	if err != nil {
 		logger.Error("failed to connect to control plane", "error", err)
 		os.Exit(1)
@@ -58,8 +75,22 @@ func main() {
 
 	client := pb.NewWorkerServiceClient(conn)
 
+	// running/runningMu are declared here, not inside runOnce, and
+	// threaded through every runOnce call - they track this Worker's
+	// actually-in-flight Jobs across stream reconnects, not just within
+	// one connection's lifetime. A Job's own goroutine (handleJob) keeps
+	// running through a broken stream regardless (its jobCtx derives
+	// from the top-level ctx, not the stream's), but before this change
+	// nothing else did: a reconnect used to start a brand new empty map,
+	// silently losing the ability to route a later CancelJob to a Job
+	// that was already in flight when the stream broke, and leaving
+	// Register with no way to tell the Control Plane what it's still
+	// actually running after a Control Plane restart wiped its Registry.
+	var runningMu sync.Mutex
+	running := make(map[string]*jobHandle)
+
 	for {
-		if err := runOnce(ctx, client, workerID, logger); err != nil {
+		if err := runOnce(ctx, client, workerID, logger, &runningMu, running); err != nil {
 			logger.Error("worker stream ended, reconnecting", "error", err)
 		}
 		select {
@@ -87,24 +118,29 @@ type jobHandle struct {
 // couldn't call stream.Recv() again until the current Job finished,
 // which would make Cancel commands impossible to deliver while
 // anything was in flight.
-func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string, logger *slog.Logger) error {
+func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string, logger *slog.Logger, mu *sync.Mutex, running map[string]*jobHandle) error {
+	mu.Lock()
+	activeRunIDs := make([]string, 0, len(running))
+	for runID := range running {
+		activeRunIDs = append(activeRunIDs, runID)
+	}
+	mu.Unlock()
+
 	regResp, err := client.Register(ctx, &pb.RegisterRequest{
 		WorkerId:         workerID,
 		SupportedEngines: []string{"compose"},
 		Labels:           map[string]string{"region": "local"},
+		ActiveRunIds:     activeRunIDs,
 	})
 	if err != nil {
 		return err
 	}
-	logger.Info("registered with control plane", "worker_id", workerID, "accepted", regResp.Accepted)
+	logger.Info("registered with control plane", "worker_id", workerID, "accepted", regResp.Accepted, "active_run_ids", activeRunIDs)
 
 	stream, err := client.StreamJobs(ctx, &pb.StreamJobsRequest{WorkerId: workerID})
 	if err != nil {
 		return err
 	}
-
-	var mu sync.Mutex
-	running := make(map[string]*jobHandle)
 
 	for {
 		cmd, err := stream.Recv()

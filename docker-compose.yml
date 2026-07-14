@@ -52,6 +52,39 @@ services:
         condition: service_completed_successfully
     restart: "no"
 
+  # One-shot: generates a real dev CA plus a server cert (CN=control-plane,
+  # SAN=control-plane,localhost) and a client cert (CN=worker), all signed
+  # by that CA, into the mtls-certs volume both control-plane and worker
+  # mount read-only. Real mTLS (internal/platform/mtls), not a TLS-
+  # disabled dev shortcut like CockroachDB's --insecure - the previous
+  # gRPC setup used insecure.NewCredentials() (plaintext, no peer
+  # verification at all); this generates the real key material that
+  # replaces it. Skips regeneration if the CA already exists in the
+  # volume, same idempotency posture as cockroach-init.
+  mtls-init:
+    image: alpine:3.20
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        apk add --no-cache openssl >/dev/null
+        cd /certs
+        if [ -f ca-cert.pem ]; then echo "certs already exist, skipping"; exit 0; fi
+        openssl genrsa -out ca-key.pem 4096
+        openssl req -x509 -new -nodes -key ca-key.pem -sha256 -days 3650 -out ca-cert.pem -subj "/CN=platform-of-platform-dev-ca"
+        openssl genrsa -out server-key.pem 4096
+        openssl req -new -key server-key.pem -out server.csr -subj "/CN=control-plane"
+        printf "subjectAltName=DNS:control-plane,DNS:localhost\n" > server-ext.cnf
+        openssl x509 -req -in server.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out server-cert.pem -days 3650 -sha256 -extfile server-ext.cnf
+        openssl genrsa -out worker-key.pem 4096
+        openssl req -new -key worker-key.pem -out worker.csr -subj "/CN=worker"
+        openssl x509 -req -in worker.csr -CA ca-cert.pem -CAkey ca-key.pem -CAcreateserial -out worker-cert.pem -days 3650 -sha256
+        rm -f *.csr *.srl *-ext.cnf
+        chmod 644 *.pem
+    volumes:
+      - mtls-certs:/certs
+    restart: "no"
+
   control-plane:
     build:
       context: .
@@ -59,15 +92,22 @@ services:
     depends_on:
       cockroach-bootstrap:
         condition: service_completed_successfully
+      mtls-init:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://root@cockroach-0:26257/platform?sslmode=disable
       APP_DATABASE_URL: postgresql://platform_app@cockroach-0:26257/platform?sslmode=disable
       HTTP_ADDR: ":8443"
       GRPC_ADDR: ":9000"
+      TLS_CA_CERT: /certs/ca-cert.pem
+      TLS_SERVER_CERT: /certs/server-cert.pem
+      TLS_SERVER_KEY: /certs/server-key.pem
       # Dev-only bootstrap secret (docs/architecture/21-deployment.md §1's
       # own MASTER_KEY framing) - a real deployment sources this from a
       # real secret store, not a compose file default.
       JWT_SIGNING_KEY: "dev-only-signing-key-not-for-production"
+    volumes:
+      - mtls-certs:/certs:ro
     ports:
       - "8443:8443"
       # Host-side 9100, not 9000 - this host already has an unrelated
@@ -77,22 +117,81 @@ services:
       # by this remap.
       - "9100:9000"
 
+  # Per-Job isolation, partial (docs/architecture/17-workers.md §4 gap) -
+  # the raw host docker.sock is mounted into THIS container only, never
+  # into the Worker. The Worker (and therefore any Job's docker-compose
+  # invocation) reaches Docker exclusively through this proxy's scoped
+  # API surface: real writes are possible (CONTAINERS/IMAGES/NETWORKS/
+  # VOLUMES/POST=1, so `docker-compose up` genuinely works), but EXEC,
+  # BUILD, SWARM, SYSTEM, PLUGINS, SECRETS, NODES and SERVICES are all
+  # denied - a Job's compose file can't exec into an unrelated
+  # container, can't touch the Docker daemon's own admin surface, can't
+  # join/inspect swarm state. Honest limit: tecnativa/docker-socket-proxy
+  # scopes by *API endpoint category*, not by container/project
+  # ownership - it does not stop one Job's compose invocation from
+  # listing or manipulating a DIFFERENT Job's containers (both still
+  # share the same Docker daemon's container namespace). Full per-Job
+  # isolation would need a Docker daemon per Job (nested dind) - a much
+  # heavier real option, deliberately not chosen here (operator's own
+  # call, weighing the added complexity against the real but partial
+  # protection this proxy already gives).
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      POST: 1
+      INFO: 1
+      EXEC: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      NODES: 0
+      PLUGINS: 0
+      SECRETS: 0
+      SERVICES: 0
+      SESSION: 0
+      SWARM: 0
+      SYSTEM: 0
+      TASKS: 0
+      AUTH: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   worker:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    depends_on: [control-plane]
+    depends_on:
+      control-plane:
+        condition: service_started
+      docker-socket-proxy:
+        condition: service_started
+      mtls-init:
+        condition: service_completed_successfully
     environment:
       CONTROL_PLANE_GRPC_ADDR: "control-plane:9000"
       WORKER_ID: "worker-1"
+      TLS_CA_CERT: /certs/ca-cert.pem
+      TLS_CLIENT_CERT: /certs/worker-cert.pem
+      TLS_CLIENT_KEY: /certs/worker-key.pem
+      TLS_SERVER_NAME: "control-plane"
+      # Points docker-compose (and any other Docker CLI call this
+      # process makes) at the socket-proxy service instead of a raw
+      # docker.sock - see the docker-socket-proxy service's own comment
+      # for exactly what that does and doesn't protect against. No code
+      # change needed for this: the Docker/Compose CLI already honors
+      # DOCKER_HOST from the environment, and exec.Command inherits this
+      # process's environment by default.
+      DOCKER_HOST: "tcp://docker-socket-proxy:2375"
     volumes:
-      # DooD - same pattern this operator's compose-platform/kubespray-webui
-      # already use, and the only way this Worker's one real engine
-      # (compose) can actually run `docker-compose up` against the host's
-      # own Docker daemon.
-      - /var/run/docker.sock:/var/run/docker.sock
+      - mtls-certs:/certs:ro
 
 volumes:
   cockroach-0-data:
   cockroach-1-data:
   cockroach-2-data:
+  mtls-certs:

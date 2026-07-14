@@ -41,6 +41,16 @@ message RegisterRequest {
   string worker_id = 1;
   repeated string supported_engines = 2;
   map<string, string> labels = 3;
+  // active_run_ids: the Run IDs this Worker is still actually running
+  // right now (docs/architecture/17-workers.md gap: the Registry's
+  // runToWorker Cancel-routing map is in-memory only, wiped on every
+  // Control Plane restart). A Worker that reconnects after a Control
+  // Plane restart re-sends every Job it hasn't finished yet, letting
+  // the Registry rebuild routing for Runs it never dispatched itself in
+  // this process's lifetime - otherwise Cancel silently stops working
+  // for exactly those Runs until they finish on their own, even though
+  // the Worker is still correctly executing them.
+  repeated string active_run_ids = 4;
 }
 
 message RegisterResponse {

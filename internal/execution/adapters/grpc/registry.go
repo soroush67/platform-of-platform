@@ -18,10 +18,14 @@ type workerEntry struct {
 // Registry is the in-memory, single-process directory of connected
 // Workers - a real, legitimate implementation for a single Control
 // Plane instance (no HA multi-instance concern in this walking
-// skeleton yet). A future multi-instance Control Plane would need this
-// state shared, not local - Redis is exactly the "cache/coordination,
+// skeleton yet - a future multi-instance Control Plane would need this
+// state shared, not local; Redis is exactly the "cache/coordination,
 // never system-of-record" role docs/architecture/05-database.md §5
-// already reserves for it, the natural place this would move to.
+// already reserves for it, the natural place this would move to).
+// register()'s active_run_ids handling (below) recovers same-instance
+// state across a Control Plane *restart* - Workers re-report what
+// they're running - but that's orthogonal to true multi-instance
+// sharing and doesn't attempt to solve it.
 type Registry struct {
 	mu      sync.RWMutex
 	workers map[string]*workerEntry
@@ -46,7 +50,15 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) register(workerID string, supportedEngines []string) chan *pb.WorkerCommand {
+// register also takes activeRunIDs - the Run IDs the connecting Worker
+// says it's still actually running (RegisterRequest.active_run_ids).
+// Rebuilding runToWorker from this on every Register, not just on
+// Dispatch, is what makes Cancel routing survive a Control Plane
+// restart: the Worker itself is the only durable source of truth for
+// "what am I currently running," since this Registry's own state is
+// never persisted (docs/architecture/17-workers.md's known no-HA gap -
+// this doesn't fix multi-instance sharing, only same-instance restart).
+func (r *Registry) register(workerID string, supportedEngines []string, activeRunIDs []string) chan *pb.WorkerCommand {
 	engines := make(map[string]bool, len(supportedEngines))
 	for _, e := range supportedEngines {
 		engines[e] = true
@@ -55,6 +67,9 @@ func (r *Registry) register(workerID string, supportedEngines []string) chan *pb
 
 	r.mu.Lock()
 	r.workers[workerID] = &workerEntry{supportedEngines: engines, jobs: jobs}
+	for _, runID := range activeRunIDs {
+		r.runToWorker[runID] = workerID
+	}
 	r.mu.Unlock()
 
 	return jobs

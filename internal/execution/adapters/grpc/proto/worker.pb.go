@@ -35,8 +35,18 @@ type RegisterRequest struct {
 	WorkerId         string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
 	SupportedEngines []string               `protobuf:"bytes,2,rep,name=supported_engines,json=supportedEngines,proto3" json:"supported_engines,omitempty"`
 	Labels           map[string]string      `protobuf:"bytes,3,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// active_run_ids: the Run IDs this Worker is still actually running
+	// right now (docs/architecture/17-workers.md gap: the Registry's
+	// runToWorker Cancel-routing map is in-memory only, wiped on every
+	// Control Plane restart). A Worker that reconnects after a Control
+	// Plane restart re-sends every Job it hasn't finished yet, letting
+	// the Registry rebuild routing for Runs it never dispatched itself in
+	// this process's lifetime - otherwise Cancel silently stops working
+	// for exactly those Runs until they finish on their own, even though
+	// the Worker is still correctly executing them.
+	ActiveRunIds  []string `protobuf:"bytes,4,rep,name=active_run_ids,json=activeRunIds,proto3" json:"active_run_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterRequest) Reset() {
@@ -86,6 +96,13 @@ func (x *RegisterRequest) GetSupportedEngines() []string {
 func (x *RegisterRequest) GetLabels() map[string]string {
 	if x != nil {
 		return x.Labels
+	}
+	return nil
+}
+
+func (x *RegisterRequest) GetActiveRunIds() []string {
+	if x != nil {
+		return x.ActiveRunIds
 	}
 	return nil
 }
@@ -538,11 +555,12 @@ var File_internal_execution_adapters_grpc_proto_worker_proto protoreflect.FileDe
 
 const file_internal_execution_adapters_grpc_proto_worker_proto_rawDesc = "" +
 	"\n" +
-	"3internal/execution/adapters/grpc/proto/worker.proto\x12\x06worker\"\xd3\x01\n" +
+	"3internal/execution/adapters/grpc/proto/worker.proto\x12\x06worker\"\xf9\x01\n" +
 	"\x0fRegisterRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12+\n" +
 	"\x11supported_engines\x18\x02 \x03(\tR\x10supportedEngines\x12;\n" +
-	"\x06labels\x18\x03 \x03(\v2#.worker.RegisterRequest.LabelsEntryR\x06labels\x1a9\n" +
+	"\x06labels\x18\x03 \x03(\v2#.worker.RegisterRequest.LabelsEntryR\x06labels\x12$\n" +
+	"\x0eactive_run_ids\x18\x04 \x03(\tR\factiveRunIds\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\".\n" +

@@ -42,6 +42,18 @@ type Config struct {
 	// much smaller values, set via env, not hardcoded into the binary.
 	RunStaleAfter     time.Duration
 	RunReaperInterval time.Duration
+	// TLSCACert/TLSServerCert/TLSServerKey: real mTLS for the Worker<->
+	// Control Plane gRPC channel (docs/architecture/17-workers.md's own
+	// "worker identity token" - the previous insecure.NewCredentials()
+	// setup was explicitly flagged dev-only). All three required
+	// together: the server presents TLSServerCert/Key and verifies every
+	// connecting Worker's client cert against TLSCACert
+	// (tls.RequireAndVerifyClientCert) - a Worker without a cert signed
+	// by this CA can't connect at all, not just "connects but is
+	// untrusted."
+	TLSCACert     string
+	TLSServerCert string
+	TLSServerKey  string
 }
 
 func Load() (Config, error) {
@@ -65,6 +77,9 @@ func Load() (Config, error) {
 		JWTSigningKey:     []byte(jwtKey),
 		RunStaleAfter:     staleAfter,
 		RunReaperInterval: reaperInterval,
+		TLSCACert:         os.Getenv("TLS_CA_CERT"),
+		TLSServerCert:     os.Getenv("TLS_SERVER_CERT"),
+		TLSServerKey:      os.Getenv("TLS_SERVER_KEY"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -75,6 +90,9 @@ func Load() (Config, error) {
 	}
 	if jwtKey == "" {
 		return Config{}, fmt.Errorf("config: JWT_SIGNING_KEY is required")
+	}
+	if cfg.TLSCACert == "" || cfg.TLSServerCert == "" || cfg.TLSServerKey == "" {
+		return Config{}, fmt.Errorf("config: TLS_CA_CERT, TLS_SERVER_CERT, and TLS_SERVER_KEY are all required - the Worker gRPC channel has no insecure fallback")
 	}
 
 	return cfg, nil

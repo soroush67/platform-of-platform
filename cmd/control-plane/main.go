@@ -38,6 +38,7 @@ import (
 	"platform-of-platform/internal/platform/config"
 	"platform-of-platform/internal/platform/httpserver"
 	"platform-of-platform/internal/platform/idempotency"
+	"platform-of-platform/internal/platform/mtls"
 	"platform-of-platform/internal/platform/outbox"
 	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
@@ -211,7 +212,12 @@ func main() {
 		return nil
 	})
 
-	grpcSrv := grpcserver.NewServer()
+	tlsCreds, err := mtls.ServerCredentials(cfg.TLSCACert, cfg.TLSServerCert, cfg.TLSServerKey)
+	if err != nil {
+		logger.Error("mtls setup failed", "error", err)
+		os.Exit(1)
+	}
+	grpcSrv := grpcserver.NewServer(grpcserver.Creds(tlsCreds))
 	executionpb.RegisterWorkerServiceServer(grpcSrv, grpcWorkerServer)
 	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {
