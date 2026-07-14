@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"platform-of-platform/internal/audit/application"
 	"platform-of-platform/internal/audit/domain"
@@ -35,7 +36,11 @@ func toAuditEntryResponse(e *domain.Entry) auditEntryResponse {
 	}
 }
 
-// ListAuditLogHandler implements GET /api/v1/orgs/{id}/audit-log.
+// ListAuditLogHandler implements
+// GET /api/v1/orgs/{id}/audit-log?limit=&cursor= - cursor-based
+// pagination (see the application service's own comment on why not
+// OFFSET). limit/cursor are both optional: no limit means the service's
+// own default page size, no cursor means the first page.
 func ListAuditLogHandler(svc *application.ListAuditEntriesService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := httpserver.UserIDFromContext(r.Context())
@@ -44,23 +49,48 @@ func ListAuditLogHandler(svc *application.ListAuditEntriesService) http.HandlerF
 			return
 		}
 
-		entries, err := svc.Execute(r.Context(), r.PathValue("id"), userID)
+		limit := 0
+		if raw := r.URL.Query().Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 0 {
+				httpserver.WriteProblem(w, http.StatusBadRequest, "validation failed", "limit must be a non-negative integer")
+				return
+			}
+			limit = parsed
+		}
+
+		page, err := svc.Execute(r.Context(), application.ListAuditEntriesInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			Limit:            limit,
+			Cursor:           r.URL.Query().Get("cursor"),
+		})
 		if err != nil {
 			if errors.Is(err, domain.ErrForbidden) {
 				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "")
+				return
+			}
+			var validationErr *domain.ValidationError
+			if errors.As(err, &validationErr) {
+				httpserver.WriteProblem(w, http.StatusBadRequest, "validation failed", validationErr.Error())
 				return
 			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to fetch audit log", "")
 			return
 		}
 
-		responses := make([]auditEntryResponse, 0, len(entries))
-		for _, e := range entries {
+		responses := make([]auditEntryResponse, 0, len(page.Entries))
+		for _, e := range page.Entries {
 			responses = append(responses, toAuditEntryResponse(e))
+		}
+
+		body := map[string]any{"data": responses}
+		if page.NextCursor != "" {
+			body["next_cursor"] = page.NextCursor
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+		json.NewEncoder(w).Encode(body)
 	}
 }

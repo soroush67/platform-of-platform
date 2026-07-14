@@ -98,6 +98,18 @@ func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableIn
 	return v, nil
 }
 
+// requiredPermissionForScope is the same tier-selection rule
+// resolveScope below applies, factored out so UpdateVariableService/
+// DeleteVariableService (which already have the Variable, via GetByID -
+// there's no scope_id-existence check left to do, the row itself is the
+// proof) can reuse just the permission-tier half.
+func requiredPermissionForScope(scopeType domain.ScopeType) string {
+	if scopeType == domain.ScopeTypeWorkspace {
+		return permissionWorkspaceManage
+	}
+	return permissionOrganizationManage
+}
+
 // resolveScope checks the scope_id is real and picks the permission
 // tier that gates it - organization/project/environment scopes are
 // org-structural (organization:manage, the same tier Project/Environment

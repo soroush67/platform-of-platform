@@ -53,7 +53,7 @@ const (
 // deliberately reused rather than inventing a new precedence model.
 var ScopeCascadeOrder = []ScopeType{ScopeTypeWorkspace, ScopeTypeEnvironment, ScopeTypeProject, ScopeTypeOrganization}
 
-func (s ScopeType) valid() bool {
+func (s ScopeType) Valid() bool {
 	switch s {
 	case ScopeTypeOrganization, ScopeTypeProject, ScopeTypeEnvironment, ScopeTypeWorkspace:
 		return true
@@ -69,7 +69,7 @@ const (
 	CategoryFileTemplate Category = "file_template"
 )
 
-func (c Category) valid() bool {
+func (c Category) Valid() bool {
 	switch c {
 	case CategoryEnvVar, CategoryEngineVar, CategoryFileTemplate:
 		return true
@@ -84,7 +84,7 @@ const (
 	SensitivitySensitive Sensitivity = "sensitive"
 )
 
-func (s Sensitivity) valid() bool {
+func (s Sensitivity) Valid() bool {
 	return s == SensitivityPlain || s == SensitivitySensitive
 }
 
@@ -109,16 +109,16 @@ func NewVariable(organizationID string, scopeType ScopeType, scopeID, key string
 	if organizationID == "" || scopeID == "" {
 		return nil, &ValidationError{Message: "organization_id and scope_id are required"}
 	}
-	if !scopeType.valid() {
+	if !scopeType.Valid() {
 		return nil, &ValidationError{Message: fmt.Sprintf("scope_type %q must be one of organization, project, environment, workspace", scopeType)}
 	}
 	if !keyPattern.MatchString(key) {
 		return nil, &ValidationError{Message: fmt.Sprintf("key %q must start with a letter/underscore and contain only letters, digits, or underscores", key)}
 	}
-	if !category.valid() {
+	if !category.Valid() {
 		return nil, &ValidationError{Message: fmt.Sprintf("category %q must be one of env_var, engine_var, file_template", category)}
 	}
-	if !sensitivity.valid() {
+	if !sensitivity.Valid() {
 		return nil, &ValidationError{Message: fmt.Sprintf("sensitivity %q must be one of plain, sensitive", sensitivity)}
 	}
 

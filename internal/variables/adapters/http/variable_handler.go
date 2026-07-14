@@ -55,6 +55,73 @@ func toVariableResponse(v *domain.Variable) variableResponse {
 	return resp
 }
 
+type updateVariableRequest struct {
+	Category    string `json:"category"`
+	Sensitivity string `json:"sensitivity"`
+	Value       string `json:"value"`
+}
+
+// UpdateVariableHandler implements
+// `PUT /orgs/{org}/variables/{variableID}` - Key/ScopeType/ScopeID are
+// immutable (see the postgres adapter's own comment), so the request
+// body only carries Value/Category/Sensitivity.
+func UpdateVariableHandler(svc *application.UpdateVariableService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req updateVariableRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		v, err := svc.Execute(r.Context(), application.UpdateVariableInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			VariableID:       r.PathValue("variableID"),
+			Value:            req.Value,
+			Category:         domain.Category(req.Category),
+			Sensitivity:      domain.Sensitivity(req.Sensitivity),
+		})
+		if err != nil {
+			writeVariablesError(w, err, "variable not found")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(toVariableResponse(v))
+	}
+}
+
+// DeleteVariableHandler implements
+// `DELETE /orgs/{org}/variables/{variableID}`.
+func DeleteVariableHandler(svc *application.DeleteVariableService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.DeleteVariableInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			VariableID:       r.PathValue("variableID"),
+		})
+		if err != nil {
+			writeVariablesError(w, err, "variable not found")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func writeVariablesError(w http.ResponseWriter, err error, notFoundTitle string) {
 	switch {
 	case errors.Is(err, domain.ErrForbidden):

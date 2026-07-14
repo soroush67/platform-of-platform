@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -56,7 +57,16 @@ func (r *AuditEntryRepository) Create(ctx context.Context, entry *domain.Entry) 
 	return tx.Commit(ctx)
 }
 
-func (r *AuditEntryRepository) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Entry, error) {
+// ListByOrganization is a keyset (cursor) query, not OFFSET-based - see
+// ListAuditEntriesService's own comment on why. beforeCreatedAt/beforeID
+// nil means "first page." The `(created_at, id) < ($2, $3)` row-value
+// comparison is what makes the cursor stable even when multiple entries
+// share the same created_at (a real possibility - several audit events
+// from one request can commit in the same instant): ordering by
+// (created_at DESC, id DESC) and comparing the pair, not created_at
+// alone, means no entry is ever skipped or repeated across a page
+// boundary.
+func (r *AuditEntryRepository) ListByOrganization(ctx context.Context, organizationID string, limit int, beforeCreatedAt *time.Time, beforeID *string) ([]*domain.Entry, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -69,8 +79,12 @@ func (r *AuditEntryRepository) ListByOrganization(ctx context.Context, organizat
 
 	rows, err := tx.Query(ctx,
 		`SELECT id, organization_id, actor, action, target_type, target_id, metadata, created_at
-		 FROM audit_entries WHERE organization_id = $1 ORDER BY created_at DESC`,
-		organizationID,
+		 FROM audit_entries
+		 WHERE organization_id = $1
+		   AND ($2::timestamptz IS NULL OR (created_at, id) < ($2, $3::uuid))
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT $4`,
+		organizationID, beforeCreatedAt, beforeID, limit,
 	)
 	if err != nil {
 		return nil, err

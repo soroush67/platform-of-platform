@@ -11,6 +11,13 @@ import (
 
 var ErrForbidden = errors.New("forbidden")
 
+// ValidationError - same per-context-local type as every other bounded
+// context in this codebase (e.g. tenancy/domain.ValidationError). Used
+// by ListAuditEntriesService for a malformed pagination cursor.
+type ValidationError struct{ Message string }
+
+func (e *ValidationError) Error() string { return e.Message }
+
 // Entry is append-only by construction, not just convention - there is
 // no Update/Delete method on this type, and the database role backing
 // this context's repository has no UPDATE/DELETE grant on audit_entries

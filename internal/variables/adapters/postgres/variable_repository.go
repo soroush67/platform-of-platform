@@ -102,6 +102,83 @@ func (r *VariableRepository) ListByScope(ctx context.Context, organizationID str
 	return variables, tx.Commit(ctx)
 }
 
+// GetByID is what UpdateVariableService/DeleteVariableService use to
+// look a Variable up by its own id (the URL's {variableID}, not a
+// scope+key triple) - the resolution cascade (GetByScope) and the
+// direct-CRUD paths (this method) are genuinely different lookup shapes,
+// so this is a real, separate query, not a thin wrapper over GetByScope.
+func (r *VariableRepository) GetByID(ctx context.Context, organizationID, variableID string) (*domain.Variable, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return nil, err
+	}
+
+	v, err := scanVariable(tx.QueryRow(ctx,
+		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, created_at
+		 FROM variables WHERE organization_id = $1 AND id = $2`,
+		organizationID, variableID,
+	))
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, domain.ErrVariableNotFound
+		}
+		return nil, err
+	}
+
+	return v, tx.Commit(ctx)
+}
+
+// Update changes Value/Category/Sensitivity in place - Key and ScopeType/
+// ScopeID are deliberately immutable (docs/architecture/05-database.md's
+// own UNIQUE(scope_type, scope_id, key) is this Variable's actual
+// identity; changing either is "delete this one, create a different
+// one," not an update to the same resource).
+func (r *VariableRepository) Update(ctx context.Context, v *domain.Variable) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, v.OrganizationID); err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		`UPDATE variables SET value = $3, category = $4, sensitivity = $5 WHERE organization_id = $1 AND id = $2`,
+		v.OrganizationID, v.ID, v.Value, string(v.Category), string(v.Sensitivity),
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *VariableRepository) Delete(ctx context.Context, organizationID, variableID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `DELETE FROM variables WHERE organization_id = $1 AND id = $2`, organizationID, variableID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }

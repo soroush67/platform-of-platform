@@ -144,6 +144,8 @@ func main() {
 	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo, orgRepo)
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
+	updateVariableService := variablesapp.NewUpdateVariableService(variableRepo, membershipRepo, roleBindingRepo)
+	deleteVariableService := variablesapp.NewDeleteVariableService(variableRepo, membershipRepo, roleBindingRepo)
 
 	runDispatchService := executionapp.NewRunDispatchService(runRepo, workspaceRepo, resolveVariableService, workerRegistry, workspaceRepo)
 	grpcWorkerServer := executiongrpc.NewServer(workerRegistry, workerReportService.HandleReport)
@@ -169,13 +171,20 @@ func main() {
 	relay := outbox.NewRelay(pool, combinedHandler, 2*time.Second, logger)
 
 	userRepo := identitypg.NewUserRepository(pool)
+	refreshTokenRepo := identitypg.NewRefreshTokenRepository(pool)
+	passwordResetTokenRepo := identitypg.NewPasswordResetTokenRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
+	refreshTokenService := identityapp.NewRefreshTokenService(refreshTokenRepo, userRepo)
+	passwordResetService := identityapp.NewPasswordResetService(passwordResetTokenRepo, userRepo, logger)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
 	mux.HandleFunc("POST /api/v1/users", identityhttp.CreateUserHandler(createUserService))
-	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, cfg.JWTSigningKey))
+	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, cfg.JWTSigningKey))
+	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))
+	mux.HandleFunc("POST /api/v1/auth/password-reset/request", identityhttp.RequestPasswordResetHandler(passwordResetService))
+	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", identityhttp.ConfirmPasswordResetHandler(passwordResetService))
 	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateOrganizationHandler(createOrgService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetOrganizationHandler(getOrgService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.AddMemberHandler(addMemberService)))
@@ -204,12 +213,14 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}/cancel", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.CancelRunHandler(cancelRunService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.CreateVariableHandler(createVariableService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ListVariablesHandler(listVariablesService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.UpdateVariableHandler(updateVariableService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.DeleteVariableHandler(deleteVariableService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/variables/resolve", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ResolveVariableHandler(resolveVariableService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/audit-log", httpserver.RequireAuth(cfg.JWTSigningKey, audithttp.ListAuditLogHandler(listAuditEntriesService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: mux,
+		Handler: httpserver.RequestID(mux),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)

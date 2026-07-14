@@ -13,6 +13,13 @@ type VariableRepository interface {
 	// resolution cascade calls once per scope level.
 	GetByScope(ctx context.Context, organizationID string, scopeType domain.ScopeType, scopeID, key string) (*domain.Variable, error)
 	ListByScope(ctx context.Context, organizationID string, scopeType domain.ScopeType, scopeID string) ([]*domain.Variable, error)
+	// GetByID/Update/Delete are the direct-CRUD lookup shape (by the
+	// Variable's own id, from the URL) - UpdateVariableService/
+	// DeleteVariableService's own ports, previously entirely unbuilt
+	// (this context only ever had create/list/resolve).
+	GetByID(ctx context.Context, organizationID, variableID string) (*domain.Variable, error)
+	Update(ctx context.Context, v *domain.Variable) error
+	Delete(ctx context.Context, organizationID, variableID string) error
 }
 
 // ProjectChecker / EnvironmentChecker / WorkspaceChecker - this
