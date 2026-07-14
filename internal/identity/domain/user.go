@@ -17,6 +17,7 @@ type ValidationError struct {
 func (e *ValidationError) Error() string { return e.Message }
 
 var ErrUserNotFound = errors.New("user not found")
+var ErrInvalidCredentials = errors.New("invalid credentials")
 
 // AuthSource is a closed set (docs/architecture/03-domain-model.md §3) -
 // a Go type instead of a bare string so an invalid value is a
@@ -47,14 +48,32 @@ var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 // itself org-scoped), per docs/architecture/03-domain-model.md §3. No
 // RLS on the users table for the same reason - see migrations/0001_init.up.sql.
 type User struct {
-	ID          string
-	Username    string
-	Email       string
-	AuthSource  AuthSource
-	ExternalID  *string
-	Status      string
-	MFAEnrolled bool
-	CreatedAt   time.Time
+	ID           string
+	Username     string
+	Email        string
+	AuthSource   AuthSource
+	ExternalID   *string
+	Status       string
+	MFAEnrolled  bool
+	CreatedAt    time.Time
+	// PasswordHash is a bcrypt hash, never a plaintext password - the
+	// domain layer never sees or handles plaintext (Stage 18 §1's "pure
+	// Go, zero third-party imports" rule for /domain means bcrypt itself
+	// lives in the application layer, which calls SetPasswordHash with an
+	// already-computed hash). Only ever set for AuthSource == local.
+	PasswordHash *string
+}
+
+// SetPasswordHash assigns an already-computed bcrypt hash - rejects
+// local users. Enforces the domain invariant "SSO users have no local
+// credential to compromise" can't be violated by an application-layer
+// bug that hashes and stores a password for an oidc/saml/ldap user.
+func (u *User) SetPasswordHash(hash string) error {
+	if u.AuthSource != AuthSourceLocal {
+		return &ValidationError{Message: "only local auth_source users can have a password"}
+	}
+	u.PasswordHash = &hash
+	return nil
 }
 
 func NewUser(username, email string, authSource AuthSource) (*User, error) {

@@ -19,3 +19,17 @@ type OrganizationRepository interface {
 	// about whether some *other* org's id happens to exist).
 	GetByID(ctx context.Context, id string) (*domain.Organization, error)
 }
+
+// MembershipRepository is the port for OrganizationMembership -
+// deliberately its own interface, not folded into OrganizationRepository,
+// since it's a different aggregate/entity with different access patterns
+// (docs/architecture/03-domain-model.md §2).
+type MembershipRepository interface {
+	Create(ctx context.Context, membership *domain.OrganizationMembership) error
+	// IsMember answers the actual access-control question every
+	// org-scoped read/write needs: not "does this org exist" (that's
+	// OrganizationRepository's RLS, which - as GetOrganizationService's
+	// own comment documents - is trivially satisfiable by anyone who
+	// knows the id) but "is *this specific* user allowed to see it."
+	IsMember(ctx context.Context, organizationID, userID string) (bool, error)
+}

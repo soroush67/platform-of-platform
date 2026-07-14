@@ -6,6 +6,7 @@ package postgres
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/identity/domain"
@@ -26,9 +27,25 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 // connection is correct here, unlike the Tenancy adapter's Create.
 func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO users (id, username, email, auth_source, external_id, status, mfa_enrolled, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		user.ID, user.Username, user.Email, string(user.AuthSource), user.ExternalID, user.Status, user.MFAEnrolled, user.CreatedAt,
+		`INSERT INTO users (id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		user.ID, user.Username, user.Email, string(user.AuthSource), user.ExternalID, user.Status, user.MFAEnrolled, user.CreatedAt, user.PasswordHash,
 	)
 	return err
+}
+
+func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+	var user domain.User
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash
+		 FROM users WHERE username = $1`,
+		username,
+	).Scan(&user.ID, &user.Username, &user.Email, &user.AuthSource, &user.ExternalID, &user.Status, &user.MFAEnrolled, &user.CreatedAt, &user.PasswordHash)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, domain.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return &user, nil
 }

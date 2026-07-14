@@ -12,18 +12,25 @@ import (
 type CreateOrganizationInput struct {
 	Name string
 	Slug string
+	// CreatedByUserID is the authenticated Principal creating this org
+	// (docs/architecture/04-api-design.md §4) - required now that this
+	// endpoint sits behind RequireAuth. The creator becomes the org's
+	// first OrganizationMembership automatically: the real-world flow
+	// this mirrors (create an org, you're in it) doubles as this
+	// walking skeleton's only way to bootstrap membership at all, since
+	// there's no invite/add-member endpoint yet.
+	CreatedByUserID string
 }
 
 // CreateOrganizationService implements the `POST /api/v1/orgs` use case
-// (docs/architecture/04-api-design.md §1). Deliberately unauthenticated at
-// this stage - the walking skeleton doesn't have Identity/RBAC's auth
-// middleware wired yet; that's the next slice, not silently skipped here.
+// (docs/architecture/04-api-design.md §1).
 type CreateOrganizationService struct {
-	repo OrganizationRepository
+	orgRepo        OrganizationRepository
+	membershipRepo MembershipRepository
 }
 
-func NewCreateOrganizationService(repo OrganizationRepository) *CreateOrganizationService {
-	return &CreateOrganizationService{repo: repo}
+func NewCreateOrganizationService(orgRepo OrganizationRepository, membershipRepo MembershipRepository) *CreateOrganizationService {
+	return &CreateOrganizationService{orgRepo: orgRepo, membershipRepo: membershipRepo}
 }
 
 func (s *CreateOrganizationService) Execute(ctx context.Context, in CreateOrganizationInput) (*domain.Organization, error) {
@@ -32,7 +39,12 @@ func (s *CreateOrganizationService) Execute(ctx context.Context, in CreateOrgani
 		return nil, err
 	}
 
-	if err := s.repo.Create(ctx, org); err != nil {
+	if err := s.orgRepo.Create(ctx, org); err != nil {
+		return nil, err
+	}
+
+	membership := domain.NewOrganizationMembership(org.ID, in.CreatedByUserID)
+	if err := s.membershipRepo.Create(ctx, membership); err != nil {
 		return nil, err
 	}
 

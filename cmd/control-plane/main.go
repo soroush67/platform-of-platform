@@ -22,6 +22,7 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 
 	"platform-of-platform/internal/platform/config"
+	"platform-of-platform/internal/platform/httpserver"
 	identityhttp "platform-of-platform/internal/identity/adapters/http"
 	identitypg "platform-of-platform/internal/identity/adapters/postgres"
 	identityapp "platform-of-platform/internal/identity/application"
@@ -54,17 +55,20 @@ func main() {
 	// Manual wiring, in one place - docs/architecture/18-backend-structure.md §5's
 	// "no DI framework" decision: every dependency is greppable from here.
 	orgRepo := tenancypg.NewOrganizationRepository(pool)
-	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo)
-	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo)
+	membershipRepo := tenancypg.NewMembershipRepository(pool)
+	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo)
+	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo, membershipRepo)
 
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
+	authenticateService := identityapp.NewAuthenticateService(userRepo)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
-	mux.HandleFunc("POST /api/v1/orgs", tenancyhttp.CreateOrganizationHandler(createOrgService))
-	mux.HandleFunc("GET /api/v1/orgs/{id}", tenancyhttp.GetOrganizationHandler(getOrgService))
 	mux.HandleFunc("POST /api/v1/users", identityhttp.CreateUserHandler(createUserService))
+	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, cfg.JWTSigningKey))
+	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateOrganizationHandler(createOrgService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetOrganizationHandler(getOrgService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,

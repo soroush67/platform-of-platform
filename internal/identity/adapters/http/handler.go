@@ -7,6 +7,7 @@ import (
 
 	"platform-of-platform/internal/identity/application"
 	"platform-of-platform/internal/identity/domain"
+	"platform-of-platform/internal/platform/auth"
 	"platform-of-platform/internal/platform/httpserver"
 )
 
@@ -14,6 +15,7 @@ type createUserRequest struct {
 	Username   string `json:"username"`
 	Email      string `json:"email"`
 	AuthSource string `json:"auth_source"`
+	Password   string `json:"password"`
 }
 
 type userResponse struct {
@@ -39,6 +41,7 @@ func CreateUserHandler(svc *application.CreateUserService) http.HandlerFunc {
 			Username:   req.Username,
 			Email:      req.Email,
 			AuthSource: domain.AuthSource(req.AuthSource),
+			Password:   req.Password,
 		})
 		if err != nil {
 			var validationErr *domain.ValidationError
@@ -59,6 +62,57 @@ func CreateUserHandler(svc *application.CreateUserService) http.HandlerFunc {
 			AuthSource: string(user.AuthSource),
 			Status:     user.Status,
 			CreatedAt:  user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+}
+
+type loginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type loginResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+}
+
+// LoginHandler implements POST /api/v1/auth/login
+// (docs/architecture/04-api-design.md §4's "User session ... local
+// login" credential type). Same error message and status for every
+// failure mode - see AuthenticateService's own comment on why unknown
+// username / wrong password / non-local user are indistinguishable
+// here on purpose.
+func LoginHandler(svc *application.AuthenticateService, jwtSecret []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req loginRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		user, err := svc.Execute(r.Context(), req.Username, req.Password)
+		if err != nil {
+			if errors.Is(err, domain.ErrInvalidCredentials) {
+				httpserver.WriteProblem(w, http.StatusUnauthorized, "invalid credentials", "")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "login failed", "")
+			return
+		}
+
+		token, err := auth.IssueAccessToken(jwtSecret, user.ID)
+		if err != nil {
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "login failed", "")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(loginResponse{
+			AccessToken: token,
+			TokenType:   "Bearer",
+			ExpiresIn:   int(auth.AccessTokenTTL.Seconds()),
 		})
 	}
 }

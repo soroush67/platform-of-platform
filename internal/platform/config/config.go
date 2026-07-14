@@ -23,14 +23,22 @@ type Config struct {
 	AppDatabaseURL    string
 	HTTPAddr          string
 	InitialAdminEmail string
+	// JWTSigningKey signs/verifies access tokens (internal/platform/auth) -
+	// same bootstrap-secret posture as MASTER_KEY in
+	// docs/architecture/21-deployment.md §1: a real deployment sources
+	// this from a real secret store, not a committed default.
+	JWTSigningKey []byte
 }
 
 func Load() (Config, error) {
+	jwtKey := os.Getenv("JWT_SIGNING_KEY")
+
 	cfg := Config{
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		AppDatabaseURL:    os.Getenv("APP_DATABASE_URL"),
 		HTTPAddr:          getenvDefault("HTTP_ADDR", ":8443"),
 		InitialAdminEmail: os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
+		JWTSigningKey:     []byte(jwtKey),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -38,6 +46,9 @@ func Load() (Config, error) {
 	}
 	if cfg.AppDatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: APP_DATABASE_URL is required")
+	}
+	if jwtKey == "" {
+		return Config{}, fmt.Errorf("config: JWT_SIGNING_KEY is required")
 	}
 
 	return cfg, nil

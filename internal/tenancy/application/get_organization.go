@@ -7,24 +7,35 @@ import (
 )
 
 // GetOrganizationService implements `GET /api/v1/orgs/{id}`
-// (docs/architecture/04-api-design.md §1). Like org creation, this is
-// deliberately unauthenticated for now - the id in the URL is taken as
-// the org to scope RLS to, rather than derived from an authenticated
-// Principal's own org membership (Stage 4 §4). That means this endpoint
-// doesn't yet prove cross-tenant isolation on its own (a caller who
-// knows any org's id can read its name/slug) - it proves the SELECT-side
-// RLS wiring works for real, which Create's INSERT-side test didn't
-// cover. Real cross-tenant read isolation needs the Identity/RBAC auth
-// middleware (a later slice) resolving the session variable from who's
-// asking, not from what they typed in the URL.
+// (docs/architecture/04-api-design.md §1). Now requires the
+// authenticated Principal's user id and checks OrganizationMembership
+// before ever calling GetByID - closing the gap the previous version of
+// this file documented: organizations' own RLS is self-referential
+// (scoping app.current_org_id to the very id in the URL trivially
+// satisfies it for anyone), so the membership check, not the
+// organizations table's RLS, is what actually makes this cross-tenant
+// safe now.
 type GetOrganizationService struct {
-	repo OrganizationRepository
+	orgRepo        OrganizationRepository
+	membershipRepo MembershipRepository
 }
 
-func NewGetOrganizationService(repo OrganizationRepository) *GetOrganizationService {
-	return &GetOrganizationService{repo: repo}
+func NewGetOrganizationService(orgRepo OrganizationRepository, membershipRepo MembershipRepository) *GetOrganizationService {
+	return &GetOrganizationService{orgRepo: orgRepo, membershipRepo: membershipRepo}
 }
 
-func (s *GetOrganizationService) Execute(ctx context.Context, id string) (*domain.Organization, error) {
-	return s.repo.GetByID(ctx, id)
+func (s *GetOrganizationService) Execute(ctx context.Context, id, requestingUserID string) (*domain.Organization, error) {
+	isMember, err := s.membershipRepo.IsMember(ctx, id, requestingUserID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		// Same "don't reveal existence" posture as domain.ErrOrganizationNotFound
+		// itself - a non-member gets exactly the response they'd get for
+		// an id that doesn't exist at all, not a 403 that would confirm
+		// the org is real.
+		return nil, domain.ErrOrganizationNotFound
+	}
+
+	return s.orgRepo.GetByID(ctx, id)
 }

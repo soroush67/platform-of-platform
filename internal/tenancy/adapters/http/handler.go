@@ -26,12 +26,17 @@ type organizationResponse struct {
 }
 
 // CreateOrganizationHandler implements POST /api/v1/orgs
-// (docs/architecture/04-api-design.md §1). Deliberately unauthenticated
-// for now - see the use case's own comment on why, and the
-// bootstrap-only "how does the very first org ever get created" framing
-// in docs/architecture/21-deployment.md §4 step 3.
+// (docs/architecture/04-api-design.md §1). Registered behind
+// httpserver.RequireAuth in main.go - the creator becomes the org's
+// first member (see the use case's own comment).
 func CreateOrganizationHandler(svc *application.CreateOrganizationService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
 		var req createOrganizationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
@@ -39,8 +44,9 @@ func CreateOrganizationHandler(svc *application.CreateOrganizationService) http.
 		}
 
 		org, err := svc.Execute(r.Context(), application.CreateOrganizationInput{
-			Name: req.Name,
-			Slug: req.Slug,
+			Name:            req.Name,
+			Slug:            req.Slug,
+			CreatedByUserID: userID,
 		})
 		if err != nil {
 			var validationErr *domain.ValidationError
@@ -58,14 +64,21 @@ func CreateOrganizationHandler(svc *application.CreateOrganizationService) http.
 	}
 }
 
-// GetOrganizationHandler implements GET /api/v1/orgs/{id} - see the use
-// case's own doc comment for what this endpoint does and doesn't yet
-// prove about tenant isolation.
+// GetOrganizationHandler implements GET /api/v1/orgs/{id}. Registered
+// behind httpserver.RequireAuth in main.go - the use case checks
+// OrganizationMembership for the authenticated user before returning
+// anything.
 func GetOrganizationHandler(svc *application.GetOrganizationService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
 		id := r.PathValue("id")
 
-		org, err := svc.Execute(r.Context(), id)
+		org, err := svc.Execute(r.Context(), id, userID)
 		if err != nil {
 			if errors.Is(err, domain.ErrOrganizationNotFound) {
 				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
