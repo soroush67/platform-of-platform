@@ -151,13 +151,22 @@ func (r *RunRepository) Update(ctx context.Context, run *domain.Run, actorUserID
 		return err
 	}
 
-	// Only Cancel() ever calls Update in this codebase's own code today
-	// (no Worker exists to drive any other transition), so run.Status
-	// here is always "canceled" in practice - the explicit check still
-	// guards against this method silently mislabeling a future,
-	// different transition as a cancellation once a Worker exists.
-	if run.Status == domain.RunStatusCanceled {
-		err = outbox.Write(ctx, tx, run.OrganizationID, "RunCanceled", map[string]any{
+	// Real Run domain events (docs/architecture/03-domain-model.md §6) for
+	// every terminal transition this codebase's own code actually
+	// produces (Run.Cancel/MarkApplied/MarkFailed) - not every status
+	// this method could theoretically see, since only those three ever
+	// call Update today.
+	var eventType string
+	switch run.Status {
+	case domain.RunStatusCanceled:
+		eventType = "RunCanceled"
+	case domain.RunStatusApplied:
+		eventType = "RunApplied"
+	case domain.RunStatusFailed:
+		eventType = "RunFailed"
+	}
+	if eventType != "" {
+		err = outbox.Write(ctx, tx, run.OrganizationID, eventType, map[string]any{
 			"actor":        actorUserID,
 			"target_type":  "run",
 			"target_id":    run.ID,
@@ -166,6 +175,72 @@ func (r *RunRepository) Update(ctx context.Context, run *domain.Run, actorUserID
 		if err != nil {
 			return err
 		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// TryStartApplying is a real atomic compare-and-swap - see the port's
+// own doc comment (internal/execution/application/ports.go) for why
+// RunDispatchService needs exactly this shape instead of a read-then-
+// write round trip.
+func (r *RunRepository) TryStartApplying(ctx context.Context, organizationID, runID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE runs SET status = 'applying', started_at = now() WHERE organization_id = $1 AND id = $2 AND status = 'queued'`,
+		organizationID, runID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+
+	err = outbox.Write(ctx, tx, organizationID, "RunApplying", map[string]any{
+		"actor":       "system",
+		"target_type": "run",
+		"target_id":   runID,
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return true, tx.Commit(ctx)
+}
+
+// RevertToQueued is RunDispatchService's compensation when
+// TryStartApplying claimed a Run but dispatch then found no connected
+// Worker - see the port's own doc comment. No outbox event on the way
+// back down; the original RunQueued event (still unpublished, since
+// this whole call happens inside that event's own Handler returning an
+// error) is what the Relay retries.
+func (r *RunRepository) RevertToQueued(ctx context.Context, organizationID, runID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		`UPDATE runs SET status = 'queued', started_at = NULL WHERE organization_id = $1 AND id = $2 AND status = 'applying'`,
+		organizationID, runID,
+	)
+	if err != nil {
+		return err
 	}
 
 	return tx.Commit(ctx)

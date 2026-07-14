@@ -1,0 +1,83 @@
+// Control Plane <-> Worker protocol (docs/architecture/04-api-design.md
+// §10, docs/architecture/17-workers.md §1). Deliberately simplified from
+// the doc's "one long-lived bidirectional stream" into two RPCs (a
+// server-stream the Worker keeps open to receive work, plus a unary
+// call to report back) - still real gRPC, still one persistent
+// connection per Worker, just not literally bidirectional-in-one-stream.
+// Flagged here explicitly as the walking skeleton's own simplification,
+// not a silent deviation from the documented design.
+syntax = "proto3";
+
+package worker;
+
+option go_package = "platform-of-platform/internal/execution/adapters/grpc/proto";
+
+service WorkerService {
+  // Register is called once at Worker startup, advertising
+  // supported_engines/labels (docs/architecture/17-workers.md §7's
+  // Worker registration - the Run Dispatcher's claim query matches
+  // against exactly this).
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // StreamJobs is the long-lived connection - the Worker keeps this
+  // call open for its entire lifetime; the Control Plane pushes a
+  // JobAssignment down it every time the Run Dispatcher matches a
+  // queued Run to this Worker.
+  rpc StreamJobs(StreamJobsRequest) returns (stream JobAssignment);
+
+  // ReportJobStatus is how progress/completion flows back - a plain
+  // unary call per status update, not a second stream.
+  rpc ReportJobStatus(JobStatusReport) returns (Ack);
+}
+
+message RegisterRequest {
+  string worker_id = 1;
+  repeated string supported_engines = 2;
+  map<string, string> labels = 3;
+}
+
+message RegisterResponse {
+  bool accepted = 1;
+}
+
+message StreamJobsRequest {
+  string worker_id = 1;
+}
+
+message JobAssignment {
+  string run_id = 1;
+  string organization_id = 2;
+  string workspace_id = 3;
+  string execution_engine = 4;
+  // config_bundle is real content this slice sources from the Variables
+  // context's own cascade resolution (a `file_template` variable), not
+  // a fabricated bypass - the GitOps context that would normally supply
+  // this (a real repo checkout) doesn't exist in this codebase yet,
+  // documented as a real, later integration point.
+  string config_bundle = 5;
+}
+
+message JobStatusReport {
+  string run_id = 1;
+  // organization_id/workspace_id are echoed back from the JobAssignment
+  // that triggered this report - needed because RLS-scoped lookups
+  // (docs/architecture/05-database.md §1) require organization_id
+  // up front, not discoverable from run_id alone without an unscoped
+  // (root-privileged) query this codebase's runtime deliberately never
+  // uses (internal/platform/config's own DatabaseURL/AppDatabaseURL
+  // split).
+  string organization_id = 2;
+  string workspace_id = 3;
+  // status is one of the Run domain's own RunStatus values this Worker
+  // is honest about actually producing: "applying", "applied", "failed",
+  // "errored" - never "planning"/"planned"/"policy_check"/
+  // "awaiting_approval", which need pieces (Policy, Approval) this
+  // codebase hasn't built yet.
+  string status = 4;
+  string log_line = 5;
+  string error_message = 6;
+}
+
+message Ack {
+  bool ok = 1;
+}

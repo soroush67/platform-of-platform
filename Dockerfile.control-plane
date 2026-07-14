@@ -1,0 +1,18 @@
+# Control Plane image - deliberately doesn't bundle any engine binaries
+# (docs/architecture/21-deployment.md §1: "the Control Plane image
+# doesn't need any of them and shouldn't have the attack surface of
+# bundling execution engines it never runs itself" - that's the Worker
+# image's job, Dockerfile.worker).
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -buildvcs=false -o /out/control-plane ./cmd/control-plane
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /out/control-plane /usr/local/bin/control-plane
+COPY migrations ./migrations
+ENTRYPOINT ["/usr/local/bin/control-plane"]

@@ -20,8 +20,13 @@ type Config struct {
 	// (migrations/0001_init.up.sql) - every runtime query the Control
 	// Plane itself issues goes through this connection, so RLS actually
 	// constrains it per docs/architecture/05-database.md §1.
-	AppDatabaseURL    string
-	HTTPAddr          string
+	AppDatabaseURL string
+	HTTPAddr       string
+	// GRPCAddr is where the Control Plane listens for Worker connections
+	// (docs/architecture/21-deployment.md §1's own
+	// CONTROL_PLANE_GRPC_ADDR: control-plane:9000 for the Worker side of
+	// this same setting).
+	GRPCAddr          string
 	InitialAdminEmail string
 	// JWTSigningKey signs/verifies access tokens (internal/platform/auth) -
 	// same bootstrap-secret posture as MASTER_KEY in
@@ -37,6 +42,7 @@ func Load() (Config, error) {
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		AppDatabaseURL:    os.Getenv("APP_DATABASE_URL"),
 		HTTPAddr:          getenvDefault("HTTP_ADDR", ":8443"),
+		GRPCAddr:          getenvDefault("GRPC_ADDR", ":9000"),
 		InitialAdminEmail: os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
 		JWTSigningKey:     []byte(jwtKey),
 	}

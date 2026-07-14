@@ -42,6 +42,36 @@ func (r *WorkspaceRepository) Create(ctx context.Context, ws *domain.Workspace) 
 	return tx.Commit(ctx)
 }
 
+// GetExecutionEngine is the Workspace side of Execution's own
+// WorkspaceEngineReader port - returns just the engine string, not the
+// full domain.Workspace, same "never leak a domain type across the
+// context boundary" reasoning as GetScope/Exists above.
+func (r *WorkspaceRepository) GetExecutionEngine(ctx context.Context, organizationID, workspaceID string) (string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return "", err
+	}
+
+	var engine string
+	err = tx.QueryRow(ctx,
+		`SELECT execution_engine FROM workspaces WHERE organization_id = $1 AND id = $2`,
+		organizationID, workspaceID,
+	).Scan(&engine)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", domain.ErrWorkspaceNotFound
+		}
+		return "", err
+	}
+
+	return engine, tx.Commit(ctx)
+}
+
 func (r *WorkspaceRepository) GetByID(ctx context.Context, organizationID, id string) (*domain.Workspace, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

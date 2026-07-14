@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,10 +22,13 @@ import (
 	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"golang.org/x/sync/errgroup"
+	grpcserver "google.golang.org/grpc"
 
 	audithttp "platform-of-platform/internal/audit/adapters/http"
 	auditpg "platform-of-platform/internal/audit/adapters/postgres"
 	auditapp "platform-of-platform/internal/audit/application"
+	executiongrpc "platform-of-platform/internal/execution/adapters/grpc"
+	executionpb "platform-of-platform/internal/execution/adapters/grpc/proto"
 	executionhttp "platform-of-platform/internal/execution/adapters/http"
 	executionpg "platform-of-platform/internal/execution/adapters/postgres"
 	executionapp "platform-of-platform/internal/execution/application"
@@ -103,16 +107,40 @@ func main() {
 	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo)
 	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
+	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo)
 
 	variableRepo := variablespg.NewVariableRepository(pool)
 	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo)
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
 
+	// Worker registry + gRPC server (docs/architecture/17-workers.md §1) -
+	// registry.Dispatch structurally satisfies Execution's own
+	// WorkerDispatcher port, same "one concrete type satisfies several
+	// ports" pattern already used for roleBindingRepo/workspaceRepo.
+	workerRegistry := executiongrpc.NewRegistry()
+	runDispatchService := executionapp.NewRunDispatchService(runRepo, workspaceRepo, resolveVariableService, workerRegistry, workspaceRepo)
+	grpcWorkerServer := executiongrpc.NewServer(workerRegistry, workerReportService.HandleReport)
+
 	auditRepo := auditpg.NewAuditEntryRepository(pool)
 	recordEntryService := auditapp.NewRecordEntryService(auditRepo)
 	listAuditEntriesService := auditapp.NewListAuditEntriesService(auditRepo, roleBindingRepo)
-	relay := outbox.NewRelay(pool, recordEntryService.HandleEvent, 2*time.Second, logger)
+
+	// One combined outbox.Handler fanning out to both real consumers of
+	// this codebase's events - Audit (records everything) and the Run
+	// Dispatcher (acts only on RunQueued) - since outbox_events has a
+	// single published_at flag, not a per-consumer delivery table
+	// (internal/platform/outbox/outbox.go's own scope). Both handlers
+	// are safe to re-run on a redelivery: Audit via source_event_id's
+	// ON CONFLICT DO NOTHING, Run Dispatch via TryStartApplying's atomic
+	// compare-and-swap.
+	combinedHandler := func(ctx context.Context, event outbox.Event) error {
+		if err := recordEntryService.HandleEvent(ctx, event); err != nil {
+			return err
+		}
+		return runDispatchService.HandleEvent(ctx, event)
+	}
+	relay := outbox.NewRelay(pool, combinedHandler, 2*time.Second, logger)
 
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
@@ -173,11 +201,25 @@ func main() {
 		return nil
 	})
 
+	grpcSrv := grpcserver.NewServer()
+	executionpb.RegisterWorkerServiceServer(grpcSrv, grpcWorkerServer)
+	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
+	if err != nil {
+		logger.Error("grpc listen failed", "error", err)
+		os.Exit(1)
+	}
+
+	g.Go(func() error {
+		logger.Info("grpc server starting", "addr", cfg.GRPCAddr)
+		return grpcSrv.Serve(grpcListener)
+	})
+
 	g.Go(func() error {
 		<-gctx.Done()
 		logger.Info("shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		grpcSrv.GracefulStop()
 		return server.Shutdown(shutdownCtx)
 	})
 

@@ -20,6 +20,18 @@ var (
 	ErrWorkspaceLocked = errors.New("workspace is locked by another run")
 	// ErrRunAlreadyTerminal - Cancel()'s own invariant.
 	ErrRunAlreadyTerminal = errors.New("run is already in a terminal status")
+	// ErrInvalidTransition - MarkApplied/MarkFailed's own invariant:
+	// only a Run actually in `applying` can complete, the same
+	// "compile-reachable, exhaustively testable" state-machine
+	// discipline Cancel() already established.
+	ErrInvalidTransition = errors.New("invalid run status transition")
+	// ErrNoWorkerAvailable - RunDispatchService's own signal that
+	// nothing is wrong with the Run itself, there's just no connected
+	// Worker for its engine *right now*. Returned as a real error so the
+	// Outbox Relay's at-least-once redelivery retries the RunQueued
+	// event later, standing in for a dedicated Stale Run Reaper this
+	// codebase doesn't have.
+	ErrNoWorkerAvailable = errors.New("no worker available for this execution engine")
 )
 
 type ValidationError struct {
@@ -29,14 +41,16 @@ type ValidationError struct {
 func (e *ValidationError) Error() string { return e.Message }
 
 // RunStatus is the closed set from docs/architecture/03-domain-model.md
-// §6. This walking skeleton's own code only ever produces `queued` and
-// `canceled` - there's no Worker (Stage 9/17) to advance a Run through
-// planning/applying, so those transitions aren't faked here. The full
-// enum is still modeled (and the CHECK constraint in
-// migrations/0005_runs.up.sql enforces it at the schema level too)
-// because Run.Status needs to be the real, complete type the eventual
-// Worker-driven transitions will write into, not a narrower one this
-// slice would have to widen later.
+// §6. This codebase's own code only ever produces `queued`, `applying`,
+// `applied`, `failed`, `errored`, and `canceled` - the Worker
+// (docs/architecture/17-workers.md) goes straight from queued to
+// applying, skipping `planning`/`planned`/`policy_check`/
+// `awaiting_approval` (real Plan/Policy/Approval flows this codebase
+// hasn't built yet, deliberately not faked). The full enum is still
+// modeled (and the CHECK constraint in migrations/0005_runs.up.sql
+// enforces it at the schema level too) because Run.Status needs to be
+// the real, complete type those future flows will write into, not a
+// narrower one this slice would have to widen later.
 type RunStatus string
 
 const (
@@ -126,6 +140,30 @@ func (r *Run) Cancel() error {
 
 	now := time.Now().UTC()
 	r.Status = RunStatusCanceled
+	r.FinishedAt = &now
+	return nil
+}
+
+// MarkApplied / MarkFailed are the two real terminal transitions the
+// Worker reports via ReportJobStatus - both only valid from `applying`,
+// enforced here the same way Cancel() enforces its own precondition,
+// not left to the caller (WorkerReportService) to remember to check.
+func (r *Run) MarkApplied() error {
+	if r.Status != RunStatusApplying {
+		return ErrInvalidTransition
+	}
+	now := time.Now().UTC()
+	r.Status = RunStatusApplied
+	r.FinishedAt = &now
+	return nil
+}
+
+func (r *Run) MarkFailed() error {
+	if r.Status != RunStatusApplying {
+		return ErrInvalidTransition
+	}
+	now := time.Now().UTC()
+	r.Status = RunStatusFailed
 	r.FinishedAt = &now
 	return nil
 }

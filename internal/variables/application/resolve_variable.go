@@ -73,6 +73,22 @@ func (s *ResolveVariableService) Execute(ctx context.Context, organizationID, wo
 	return nil, domain.ErrVariableNotFound
 }
 
+// ResolveValue is a thin wrapper around Execute shaped for cross-context
+// callers - Execution's own VariableResolver port
+// (internal/execution/application/ports.go) matches this exact
+// signature, so it never has to import variables/domain just to read a
+// resolved value.
+func (s *ResolveVariableService) ResolveValue(ctx context.Context, organizationID, workspaceID, key, requestingUserID string) (string, bool, error) {
+	v, err := s.Execute(ctx, organizationID, workspaceID, key, requestingUserID)
+	if err != nil {
+		if errors.Is(err, domain.ErrVariableNotFound) || errors.Is(err, domain.ErrScopeNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return v.Value, true, nil
+}
+
 func (s *ResolveVariableService) tryScope(ctx context.Context, organizationID string, scopeType domain.ScopeType, scopeID, key string) (*domain.Variable, error) {
 	v, err := s.repo.GetByScope(ctx, organizationID, scopeType, scopeID, key)
 	if err != nil {

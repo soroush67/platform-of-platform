@@ -1,0 +1,21 @@
+# Worker image - the one that actually bundles engine tooling
+# (docs/architecture/21-deployment.md §1). This walking skeleton
+# implements exactly one real engine (see cmd/worker/main.go's own
+# comment on why: compose), so docker.io + docker-compose are the only
+# engine dependencies here - the same package combination verified for
+# real against a live CockroachDB + Control Plane during this feature's
+# own development (docker.io alone doesn't ship the `docker compose`
+# plugin subcommand in this base image; the classic hyphenated
+# docker-compose binary is what's actually available and used).
+FROM golang:1.25 AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -buildvcs=false -o /out/worker ./cmd/worker
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/worker /usr/local/bin/worker
+ENTRYPOINT ["/usr/local/bin/worker"]
