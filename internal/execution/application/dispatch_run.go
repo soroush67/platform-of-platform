@@ -58,7 +58,7 @@ func (s *RunDispatchService) HandleEvent(ctx context.Context, event outbox.Event
 	// this has to be a compare-and-swap, not a read-then-write: a
 	// redelivered RunQueued event (the Outbox Relay's at-least-once
 	// guarantee) must not double-dispatch the same Run.
-	started, err := s.runRepo.TryStartApplying(ctx, organizationID, runID)
+	started, err := s.runRepo.TryStartApplying(ctx, organizationID, runID, workspaceID)
 	if err != nil {
 		return err
 	}

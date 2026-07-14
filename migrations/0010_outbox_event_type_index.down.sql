@@ -1,0 +1,1 @@
+DROP INDEX outbox_events_type_occurred;

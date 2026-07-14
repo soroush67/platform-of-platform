@@ -108,6 +108,7 @@ func main() {
 	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
 	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo)
+	staleRunReaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, cfg.RunStaleAfter, cfg.RunReaperInterval, logger)
 
 	variableRepo := variablespg.NewVariableRepository(pool)
 	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo)
@@ -191,6 +192,10 @@ func main() {
 
 	g.Go(func() error {
 		return relay.Run(gctx)
+	})
+
+	g.Go(func() error {
+		return staleRunReaper.Run(gctx)
 	})
 
 	g.Go(func() error {

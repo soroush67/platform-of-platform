@@ -7,6 +7,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 type Config struct {
@@ -33,10 +34,27 @@ type Config struct {
 	// docs/architecture/21-deployment.md §1: a real deployment sources
 	// this from a real secret store, not a committed default.
 	JWTSigningKey []byte
+	// RunStaleAfter/RunReaperInterval configure the Stale Run Reaper
+	// (internal/execution/application/reap_stale_runs.go) - how long a
+	// Run may sit in `applying` before it's considered abandoned, and
+	// how often the sweep runs. Defaults are production-shaped (5
+	// minutes, 30 seconds); real verification of this feature needs
+	// much smaller values, set via env, not hardcoded into the binary.
+	RunStaleAfter     time.Duration
+	RunReaperInterval time.Duration
 }
 
 func Load() (Config, error) {
 	jwtKey := os.Getenv("JWT_SIGNING_KEY")
+
+	staleAfter, err := time.ParseDuration(getenvDefault("RUN_STALE_AFTER", "5m"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: RUN_STALE_AFTER: %w", err)
+	}
+	reaperInterval, err := time.ParseDuration(getenvDefault("RUN_REAPER_INTERVAL", "30s"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: RUN_REAPER_INTERVAL: %w", err)
+	}
 
 	cfg := Config{
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
@@ -45,6 +63,8 @@ func Load() (Config, error) {
 		GRPCAddr:          getenvDefault("GRPC_ADDR", ":9000"),
 		InitialAdminEmail: os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
 		JWTSigningKey:     []byte(jwtKey),
+		RunStaleAfter:     staleAfter,
+		RunReaperInterval: reaperInterval,
 	}
 
 	if cfg.DatabaseURL == "" {

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -184,7 +185,7 @@ func (r *RunRepository) Update(ctx context.Context, run *domain.Run, actorUserID
 // own doc comment (internal/execution/application/ports.go) for why
 // RunDispatchService needs exactly this shape instead of a read-then-
 // write round trip.
-func (r *RunRepository) TryStartApplying(ctx context.Context, organizationID, runID string) (bool, error) {
+func (r *RunRepository) TryStartApplying(ctx context.Context, organizationID, runID, workspaceID string) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -206,10 +207,16 @@ func (r *RunRepository) TryStartApplying(ctx context.Context, organizationID, ru
 		return false, nil
 	}
 
+	// workspace_id is required here (unlike RunQueued's payload, which
+	// only happened to include it because Create already had it to
+	// hand) - the Stale Run Reaper's FindStaleApplyingRuns reads it
+	// straight back out of this exact event to know which Workspace to
+	// unlock, without a second lookup.
 	err = outbox.Write(ctx, tx, organizationID, "RunApplying", map[string]any{
-		"actor":       "system",
-		"target_type": "run",
-		"target_id":   runID,
+		"actor":        "system",
+		"target_type":  "run",
+		"target_id":    runID,
+		"workspace_id": workspaceID,
 	})
 	if err != nil {
 		return false, err
@@ -244,6 +251,84 @@ func (r *RunRepository) RevertToQueued(ctx context.Context, organizationID, runI
 	}
 
 	return tx.Commit(ctx)
+}
+
+// FindStaleApplyingRuns reads outbox_events directly - deliberately not
+// the runs table itself, which has RLS and would only ever show one
+// org's rows per session. Finding stale runs is inherently a cross-org
+// scan (the same reason the Outbox Relay itself reads outbox_events
+// instead of polling runs), and outbox_events deliberately has no RLS
+// (migrations/0007_outbox_audit.up.sql's own comment on why). A
+// RunApplying event older than olderThan is only a *candidate* - the
+// caller still confirms via MarkErroredIfStillApplying that the Run
+// hasn't already reached a real terminal status on its own (applied,
+// failed, canceled) before treating it as genuinely stale.
+func (r *RunRepository) FindStaleApplyingRuns(ctx context.Context, olderThan time.Time) ([]domain.StaleRunCandidate, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT organization_id, payload->>'target_id', payload->>'workspace_id'
+		 FROM outbox_events WHERE event_type = 'RunApplying' AND occurred_at < $1`,
+		olderThan,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var candidates []domain.StaleRunCandidate
+	for rows.Next() {
+		var c domain.StaleRunCandidate
+		if err := rows.Scan(&c.OrganizationID, &c.RunID, &c.WorkspaceID); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return candidates, nil
+}
+
+// MarkErroredIfStillApplying is the Stale Run Reaper's own atomic
+// compare-and-swap - same "conditional UPDATE, not read-then-write"
+// reasoning as TryStartApplying, needed here because a Run flagged as a
+// *candidate* by FindStaleApplyingRuns may have already completed
+// normally between when its RunApplying event fired and when the Reaper
+// got around to checking it; this only acts if it's still genuinely
+// stuck in `applying`.
+func (r *RunRepository) MarkErroredIfStillApplying(ctx context.Context, organizationID, runID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	tag, err := tx.Exec(ctx,
+		`UPDATE runs SET status = 'errored', finished_at = now() WHERE organization_id = $1 AND id = $2 AND status = 'applying'`,
+		organizationID, runID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+
+	err = outbox.Write(ctx, tx, organizationID, "RunErrored", map[string]any{
+		"actor":       "system",
+		"target_type": "run",
+		"target_id":   runID,
+		"reason":      "stale run reaper: no completion reported before timeout",
+	})
+	if err != nil {
+		return false, err
+	}
+
+	return true, tx.Commit(ctx)
 }
 
 // rowScanner - both pgx.Row (QueryRow) and pgx.Rows (Query, via its

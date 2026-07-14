@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"time"
 
 	"platform-of-platform/internal/execution/domain"
 )
@@ -25,12 +26,22 @@ type RunRepository interface {
 	// "atomic conditional update, not read-then-write" reasoning as
 	// WorkspaceLocker.TryLock. Returns (false, nil) if the Run wasn't
 	// in `queued` when this ran (already dispatched, or canceled first).
-	TryStartApplying(ctx context.Context, organizationID, runID string) (bool, error)
+	// workspaceID is attached to the RunApplying outbox event so the
+	// Stale Run Reaper (reap_stale_runs.go) can unlock the right
+	// Workspace without a second lookup.
+	TryStartApplying(ctx context.Context, organizationID, runID, workspaceID string) (bool, error)
 	// RevertToQueued undoes TryStartApplying when dispatch itself then
 	// fails to find a connected Worker - a best-effort compensation, not
-	// a full saga (see RunDispatchService's own comment on why this
-	// codebase doesn't have a dedicated Stale Run Reaper).
+	// a full saga.
 	RevertToQueued(ctx context.Context, organizationID, runID string) error
+	// FindStaleApplyingRuns and MarkErroredIfStillApplying are the Stale
+	// Run Reaper's own two operations (reap_stale_runs.go) - see that
+	// file's own doc comment for why a Run whose Worker died *after*
+	// successfully receiving its JobAssignment needs a dedicated
+	// mechanism, not just TriggerRunService's "no Worker was connected
+	// at dispatch time" retry path.
+	FindStaleApplyingRuns(ctx context.Context, olderThan time.Time) ([]domain.StaleRunCandidate, error)
+	MarkErroredIfStillApplying(ctx context.Context, organizationID, runID string) (bool, error)
 }
 
 // WorkspaceLocker is this context's port into Workspace for the one

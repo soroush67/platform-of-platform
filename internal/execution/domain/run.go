@@ -88,6 +88,18 @@ const (
 	RunTriggerAPI       RunTrigger = "api"
 )
 
+// StaleRunCandidate is what the Stale Run Reaper
+// (docs/architecture/07-module-execution.md §3) works with - read
+// straight from outbox_events (no RLS on that table, see
+// RunRepository.FindStaleApplyingRuns's own comment), a genuine
+// cross-org scan, unlike every other Run query in this codebase which
+// is scoped to one organizationID at a time.
+type StaleRunCandidate struct {
+	OrganizationID string
+	RunID          string
+	WorkspaceID    string
+}
+
 // Run is the Execution context's aggregate root
 // (docs/architecture/03-domain-model.md §6).
 type Run struct {
