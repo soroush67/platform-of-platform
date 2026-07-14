@@ -11,13 +11,14 @@ services:
   control-plane:
     image: platform/control-plane:${VERSION}
     environment:
-      DATABASE_URL: postgres://...
+      DATABASE_URL: postgresql://root@cockroach-0:26257/platform?sslmode=disable      # root/superuser DSN, migrations only - bypasses RLS, per docs/architecture/05-database.md §0
+      APP_DATABASE_URL: postgresql://platform_app@cockroach-0:26257/platform?sslmode=disable  # non-superuser DSN every runtime query actually uses - RLS applies here
       NATS_URL: nats://nats:4222
       REDIS_URL: redis://redis:6379
       OBJECT_STORAGE_ENDPOINT: http://minio:9000
       MASTER_KEY: ${MASTER_KEY}           # envelope encryption root, Stage 11 SS1 - same bootstrap-secret posture as compose-platform/vault-ha this session
       INITIAL_PLATFORM_ADMIN_EMAIL: ${INITIAL_PLATFORM_ADMIN_EMAIL}
-    depends_on: [postgres, nats, redis, minio]
+    depends_on: [cockroach-0, nats, redis, minio]
     ports: ["8443:8443"]                   # HTTPS only, per Stage 4 - no plaintext HTTP listener in this binary at all
 
   worker:
@@ -33,9 +34,31 @@ services:
     image: platform/notification-dispatcher:${VERSION}
     deploy: { replicas: 2 }
 
-  postgres:
-    image: postgres:16
-    volumes: [postgres-data:/var/lib/postgresql/data]
+  # CockroachDB, not Postgres - docs/architecture/05-database.md §0 explains
+  # why (native horizontal clustering is the production HA target, not a
+  # v1-only convenience). Three nodes is the minimum real cluster size
+  # (CockroachDB needs an odd number >=3 for Raft consensus to survive a
+  # single node loss) - a single-node dev/CI instance is a legitimate
+  # *smaller* deployment of the same image (`start-single-node` instead of
+  # `start --join=...`), not a different technology, so nothing here
+  # forecloses running with just cockroach-0 locally.
+  cockroach-0:
+    image: cockroachdb/cockroach:latest
+    command: ["start", "--insecure", "--join=cockroach-0,cockroach-1,cockroach-2"]
+    volumes: [cockroach-0-data:/cockroach/cockroach-data]
+  cockroach-1:
+    image: cockroachdb/cockroach:latest
+    command: ["start", "--insecure", "--join=cockroach-0,cockroach-1,cockroach-2"]
+    volumes: [cockroach-1-data:/cockroach/cockroach-data]
+  cockroach-2:
+    image: cockroachdb/cockroach:latest
+    command: ["start", "--insecure", "--join=cockroach-0,cockroach-1,cockroach-2"]
+    volumes: [cockroach-2-data:/cockroach/cockroach-data]
+  cockroach-init:
+    image: cockroachdb/cockroach:latest
+    command: ["init", "--insecure", "--host=cockroach-0"]
+    depends_on: [cockroach-0, cockroach-1, cockroach-2]
+    restart: "no"                          # runs once, forms the cluster, exits - not a long-lived service
 
   nats:
     image: nats:2-alpine
@@ -117,8 +140,11 @@ across three separate projects this session applies unchanged here.
 ## 4. Bootstrap sequence
 
 ```
-1. docker-compose up -d postgres nats redis minio
-2. control-plane runs `golang-migrate up` on first start (Stage 5 SS3) -
+1. docker-compose up -d cockroach-0 cockroach-1 cockroach-2 cockroach-init nats redis minio
+2. control-plane runs `golang-migrate up` (the real `cockroachdb` driver,
+   not the `postgres` one - a real difference in transaction/DDL handling
+   between the two engines, not interchangeable at the driver layer even
+   though the SQL itself is nearly identical) on first start (Stage 5 SS3) -
    same "the app migrates itself on startup" convention as this
    operator's compose-platform/mongodb-cluster/vault-ha projects this
    session, not a separate manual migration step an operator has to
@@ -139,10 +165,15 @@ across three separate projects this session applies unchanged here.
 ## 5. Backup / restore - three systems, three real strategies, no
 ## custom backup tooling
 
-- **Postgres**: standard `pg_dump`/WAL archiving (or the managed
-  service's own backup feature in the Kubernetes/managed target) - it's
-  the system of record (Stage 5), so this is the backup that actually
-  matters most and gets the least novel treatment on purpose.
+- **CockroachDB**: native `BACKUP`/`RESTORE` SQL statements straight to
+  the same object storage (Stage 5 §4) the platform already runs - not a
+  separate backup target or tool to operate, CockroachDB's own built-in
+  mechanism (incremental, cluster- or database-scoped) is more directly
+  matched to a distributed-SQL engine than a `pg_dump`-style logical dump
+  would be, and it's what CockroachDB itself recommends over a
+  Postgres-style approach. It's the system of record (Stage 5), so this
+  is the backup that actually matters most and gets the least novel
+  treatment on purpose.
 - **Object storage**: bucket versioning + cross-region/cross-host
   replication where the deployment target supports it (MinIO's own
   replication for self-hosted, native for managed S3/GCS) - state

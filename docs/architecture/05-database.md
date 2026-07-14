@@ -5,7 +5,44 @@ justified in Stage 1/2 (and one, standalone TSDB/search, deliberately
 cut) - this doc goes one level deeper: *which* tables, *what* isolation
 model, *what* indexes the Stage 4 API's actual access patterns need.
 
-## 1. Multi-tenancy isolation: shared schema + `organization_id` + Postgres Row-Level Security
+## 0. Engine: CockroachDB, not vanilla Postgres
+
+**Updated from this doc's original draft, which assumed Postgres without
+naming the choice explicitly** - CockroachDB, wire- and SQL-compatible
+enough with Postgres that everything below (RLS, `pgx`, `golang-migrate`)
+carries over unchanged, chosen over vanilla Postgres for one property
+vanilla Postgres doesn't have natively: **real horizontal clustering**.
+Stage 2's HA story for every other stateless component (Control Plane,
+Worker, Notification Dispatcher) is "run more replicas behind a load
+balancer" - Postgres alone can't answer the same way for the one
+genuinely stateful piece without bolting on a separate HA layer
+(Patroni/repmgr + a proxy) that's operational complexity this design
+doesn't otherwise need anywhere else. CockroachDB gives that clustering
+as a property of the database itself (add a node, it rebalances ranges
+automatically), which is the deployment target this system needs -
+**this isn't a v1-only dev convenience, real multi-node CockroachDB
+clustering is the production HA target**, not something deferred to a
+"future managed Postgres" swap-in. It's also the exact database this
+operator's own `compose-platform`, built earlier this session, already
+runs in production - reusing a proven-in-this-session stack choice
+rather than introducing a second database technology to operate.
+
+**Verified for real before committing to this, not assumed from Postgres
+familiarity**: against a real single-node CockroachDB container,
+`gen_random_uuid()` is a core builtin (no `pgcrypto` extension needed),
+`ENABLE ROW LEVEL SECURITY` / `FORCE ROW LEVEL SECURITY` / `CREATE POLICY
+... USING (...)` all work, a custom session variable
+(`SET app.current_org_id = '...'`) is readable via
+`current_setting('app.current_org_id', true)`, and - the property that
+actually matters - a non-superuser role scoped to one org via that
+session variable **only ever sees that org's rows**, while `root`
+(migrations) transparently bypasses RLS the same way a Postgres
+superuser does. §1 below is the reasoning; this paragraph is the
+confirmation that the reasoning holds on the actual engine chosen, via
+`docker exec ... cockroach sql` against org-A/org-B rows and an
+`app_user` role, not asserted from how Postgres RLS is known to behave.
+
+## 1. Multi-tenancy isolation: shared schema + `organization_id` + Row-Level Security
 
 Three real options existed: database-per-tenant, schema-per-tenant, or
 shared schema with a tenant column. Picking shared-schema-plus-RLS, and
@@ -120,11 +157,13 @@ depth alongside the Postgres RLS story above, not a replacement for it.
   premature to design the exact partition boundary now against data
   that doesn't exist yet. Flagged here so it isn't forgotten, not
   designed here so it isn't designed against guessed numbers.
-- **Read replicas** - a deployment-topology concern (Stage 2 already
-  covers "Postgres can be swapped for a managed/HA one without app
-  changes" as the load-bearing property); which queries route to a
-  replica is an optimization pass once real query load exists to
-  optimize against.
+- **Read replicas / follower reads** - CockroachDB's own answer to this
+  (§0) is multi-node clustering plus, if read latency ever justifies it,
+  `AS OF SYSTEM TIME follower_read_timestamp()` reads served from the
+  nearest replica - a deployment-topology and query-routing concern,
+  same as read replicas would be on any engine; which queries actually
+  need it is an optimization pass once real query load exists to
+  optimize against, not designed here against guessed numbers.
 
 ## Open questions before Stage 6 (events)
 
