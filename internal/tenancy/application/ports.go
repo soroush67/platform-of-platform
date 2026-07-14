@@ -11,7 +11,13 @@ import (
 // use, per the dependency-inversion rule in
 // docs/architecture/18-backend-structure.md §3.
 type OrganizationRepository interface {
-	Create(ctx context.Context, org *domain.Organization) error
+	// Create takes createdByUserID purely to attach it to the
+	// OrganizationCreated outbox event it writes in the same
+	// transaction as the INSERT (internal/platform/outbox's whole
+	// reason to exist) - it's not a field on Organization itself
+	// (Stage 3 §2 has no created_by column), so the application layer
+	// can't just read it back off org afterward.
+	Create(ctx context.Context, org *domain.Organization, createdByUserID string) error
 	// GetByID returns ErrOrganizationNotFound if no row is visible for id -
 	// either because it genuinely doesn't exist, or because RLS hid it
 	// (the two are indistinguishable by design, per

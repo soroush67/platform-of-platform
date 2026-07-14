@@ -1,0 +1,92 @@
+package postgres
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"platform-of-platform/internal/audit/domain"
+)
+
+type AuditEntryRepository struct {
+	pool *pgxpool.Pool
+}
+
+func NewAuditEntryRepository(pool *pgxpool.Pool) *AuditEntryRepository {
+	return &AuditEntryRepository{pool: pool}
+}
+
+// Create is the only write method this type has - no Update, no
+// Delete, matching the platform_app role's own grant on audit_entries
+// (SELECT, INSERT only - migrations/0007_outbox_audit.up.sql). Called
+// only from the Relay's dispatch loop (via RecordEntryService), never
+// from an HTTP request - there is deliberately no
+// "POST /audit-log" route anywhere in this codebase.
+func (r *AuditEntryRepository) Create(ctx context.Context, entry *domain.Entry) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, entry.OrganizationID); err != nil {
+		return err
+	}
+
+	metadata, err := json.Marshal(entry.Metadata)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		`INSERT INTO audit_entries (id, organization_id, actor, action, target_type, target_id, metadata, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		entry.ID, entry.OrganizationID, entry.Actor, entry.Action, entry.TargetType, entry.TargetID, metadata, entry.CreatedAt,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+func (r *AuditEntryRepository) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Entry, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, organization_id, actor, action, target_type, target_id, metadata, created_at
+		 FROM audit_entries WHERE organization_id = $1 ORDER BY created_at DESC`,
+		organizationID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var entries []*domain.Entry
+	for rows.Next() {
+		var e domain.Entry
+		var metadata []byte
+		if err := rows.Scan(&e.ID, &e.OrganizationID, &e.Actor, &e.Action, &e.TargetType, &e.TargetID, &metadata, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(metadata, &e.Metadata); err != nil {
+			return nil, err
+		}
+		entries = append(entries, &e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return entries, tx.Commit(ctx)
+}

@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/execution/domain"
+	"platform-of-platform/internal/platform/outbox"
 )
 
 type RunRepository struct {
@@ -35,6 +36,22 @@ func (r *RunRepository) Create(ctx context.Context, run *domain.Run) error {
 		run.ID, run.OrganizationID, run.WorkspaceID, string(run.Trigger), run.TriggeredBy, string(run.Status),
 		run.PlanOutputRef, run.ApplyOutputRef, run.CreatedAt, run.StartedAt, run.FinishedAt,
 	)
+	if err != nil {
+		return err
+	}
+
+	// docs/architecture/03-domain-model.md §6: "RunQueued ... this is the
+	// single busiest event stream in the system." Only RunQueued is
+	// emitted here (not the full PlanCompleted/RunApplying/... set) since
+	// this codebase has no Worker to ever produce those - see the
+	// domain package's own comment on why RunStatus is modeled fully but
+	// only queued/canceled are ever real here.
+	err = outbox.Write(ctx, tx, run.OrganizationID, "RunQueued", map[string]any{
+		"actor":        run.TriggeredBy,
+		"target_type":  "run",
+		"target_id":    run.ID,
+		"workspace_id": run.WorkspaceID,
+	})
 	if err != nil {
 		return err
 	}
@@ -109,7 +126,11 @@ func (r *RunRepository) ListByWorkspace(ctx context.Context, organizationID, wor
 	return runs, tx.Commit(ctx)
 }
 
-func (r *RunRepository) Update(ctx context.Context, run *domain.Run) error {
+// Update takes actorUserID for the same reason
+// OrganizationRepository.Create does - it's not a field on Run, it's
+// who performed *this particular* mutation, needed only for the outbox
+// event this method writes in the same transaction.
+func (r *RunRepository) Update(ctx context.Context, run *domain.Run, actorUserID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -128,6 +149,23 @@ func (r *RunRepository) Update(ctx context.Context, run *domain.Run) error {
 	)
 	if err != nil {
 		return err
+	}
+
+	// Only Cancel() ever calls Update in this codebase's own code today
+	// (no Worker exists to drive any other transition), so run.Status
+	// here is always "canceled" in practice - the explicit check still
+	// guards against this method silently mislabeling a future,
+	// different transition as a cancellation once a Worker exists.
+	if run.Status == domain.RunStatusCanceled {
+		err = outbox.Write(ctx, tx, run.OrganizationID, "RunCanceled", map[string]any{
+			"actor":        actorUserID,
+			"target_type":  "run",
+			"target_id":    run.ID,
+			"workspace_id": run.WorkspaceID,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit(ctx)

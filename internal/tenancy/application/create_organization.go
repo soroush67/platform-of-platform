@@ -47,7 +47,7 @@ func (s *CreateOrganizationService) Execute(ctx context.Context, in CreateOrgani
 		return nil, err
 	}
 
-	if err := s.orgRepo.Create(ctx, org); err != nil {
+	if err := s.orgRepo.Create(ctx, org, in.CreatedByUserID); err != nil {
 		return nil, err
 	}
 

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"platform-of-platform/internal/platform/outbox"
 	"platform-of-platform/internal/tenancy/domain"
 )
 
@@ -33,7 +34,7 @@ func NewOrganizationRepository(pool *pgxpool.Pool) *OrganizationRepository {
 // to see, so satisfying the organizations_isolation RLS policy's WITH
 // CHECK for this INSERT doesn't require any broader privilege than
 // creating exactly this one org.
-func (r *OrganizationRepository) Create(ctx context.Context, org *domain.Organization) error {
+func (r *OrganizationRepository) Create(ctx context.Context, org *domain.Organization, createdByUserID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -57,6 +58,20 @@ func (r *OrganizationRepository) Create(ctx context.Context, org *domain.Organiz
 		`INSERT INTO organizations (id, name, slug, settings, quota, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
 		org.ID, org.Name, org.Slug, settings, quota, org.CreatedAt,
 	)
+	if err != nil {
+		return err
+	}
+
+	// Same transaction as the INSERT above - the Transactional Outbox
+	// pattern's whole point (internal/platform/outbox's own doc
+	// comment): this event and the org row commit or roll back together.
+	err = outbox.Write(ctx, tx, org.ID, "OrganizationCreated", map[string]any{
+		"actor":       createdByUserID,
+		"target_type": "organization",
+		"target_id":   org.ID,
+		"name":        org.Name,
+		"slug":        org.Slug,
+	})
 	if err != nil {
 		return err
 	}

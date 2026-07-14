@@ -20,15 +20,20 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"golang.org/x/sync/errgroup"
 
-	"platform-of-platform/internal/platform/config"
-	"platform-of-platform/internal/platform/httpserver"
+	audithttp "platform-of-platform/internal/audit/adapters/http"
+	auditpg "platform-of-platform/internal/audit/adapters/postgres"
+	auditapp "platform-of-platform/internal/audit/application"
 	executionhttp "platform-of-platform/internal/execution/adapters/http"
 	executionpg "platform-of-platform/internal/execution/adapters/postgres"
 	executionapp "platform-of-platform/internal/execution/application"
 	identityhttp "platform-of-platform/internal/identity/adapters/http"
 	identitypg "platform-of-platform/internal/identity/adapters/postgres"
 	identityapp "platform-of-platform/internal/identity/application"
+	"platform-of-platform/internal/platform/config"
+	"platform-of-platform/internal/platform/httpserver"
+	"platform-of-platform/internal/platform/outbox"
 	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
@@ -103,6 +108,11 @@ func main() {
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
 
+	auditRepo := auditpg.NewAuditEntryRepository(pool)
+	recordEntryService := auditapp.NewRecordEntryService(auditRepo)
+	listAuditEntriesService := auditapp.NewListAuditEntriesService(auditRepo, roleBindingRepo)
+	relay := outbox.NewRelay(pool, recordEntryService.HandleEvent, 2*time.Second, logger)
+
 	userRepo := identitypg.NewUserRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
@@ -130,6 +140,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.CreateVariableHandler(createVariableService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ListVariablesHandler(listVariablesService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/variables/resolve", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ResolveVariableHandler(resolveVariableService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/audit-log", httpserver.RequireAuth(cfg.JWTSigningKey, audithttp.ListAuditLogHandler(listAuditEntriesService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,
@@ -139,21 +150,38 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	go func() {
+	// Every background Runnable (docs/architecture/18-backend-structure.md
+	// §4 - so far just the Outbox Relay, but this is the same supervision
+	// shape the doc names for every future one: "starts every registered
+	// Runnable in its own goroutine under one errgroup.Group tied to a
+	// context that's canceled on SIGTERM") plus the HTTP server itself,
+	// under one errgroup so a genuine failure in either one triggers a
+	// coordinated shutdown of both, not one silently outliving the other.
+	g, gctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		return relay.Run(gctx)
+	})
+
+	g.Go(func() error {
 		logger.Info("http server starting", "addr", cfg.HTTPAddr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("http server failed", "error", err)
-			os.Exit(1)
+			return err
 		}
-	}()
+		return nil
+	})
 
-	<-ctx.Done()
-	logger.Info("shutting down")
+	g.Go(func() error {
+		<-gctx.Done()
+		logger.Info("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
+	})
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("graceful shutdown failed", "error", err)
+	if err := g.Wait(); err != nil {
+		logger.Error("fatal error", "error", err)
+		os.Exit(1)
 	}
 }
 

@@ -40,7 +40,7 @@ func (s *CancelRunService) Execute(ctx context.Context, organizationID, workspac
 		return nil, err
 	}
 
-	if err := s.runRepo.Update(ctx, run); err != nil {
+	if err := s.runRepo.Update(ctx, run, requestingUserID); err != nil {
 		return nil, err
 	}
 
