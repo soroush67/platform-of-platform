@@ -85,6 +85,23 @@ services:
       - mtls-certs:/certs
     restart: "no"
 
+  # Real distributed tracing backend (docs' own deferred OpenTelemetry
+  # gap, built for real now) - all-in-one is the genuine "one container,
+  # in-memory storage, real OTLP receiver + real Jaeger UI" shape every
+  # local/dev OTel setup uses; a production deployment would split this
+  # into a real collector + a persistent trace store (Elasticsearch/
+  # Cassandra/ClickHouse), a further, real, not-built-here step. UI
+  # published to the host (16686) so the operator can actually look at
+  # traces; the OTLP receiver ports (4317 grpc, 4318 http) stay
+  # internal-only - only control-plane/worker need to reach them, over
+  # the compose network's own DNS.
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+
   control-plane:
     build:
       context: .
@@ -94,6 +111,8 @@ services:
         condition: service_completed_successfully
       mtls-init:
         condition: service_completed_successfully
+      jaeger:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://root@cockroach-0:26257/platform?sslmode=disable
       APP_DATABASE_URL: postgresql://platform_app@cockroach-0:26257/platform?sslmode=disable
@@ -102,6 +121,8 @@ services:
       TLS_CA_CERT: /certs/ca-cert.pem
       TLS_SERVER_CERT: /certs/server-cert.pem
       TLS_SERVER_KEY: /certs/server-key.pem
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+      OTEL_SERVICE_NAME: "control-plane"
       # Dev-only bootstrap secret (docs/architecture/21-deployment.md §1's
       # own MASTER_KEY framing) - a real deployment sources this from a
       # real secret store, not a compose file default.
@@ -172,6 +193,8 @@ services:
         condition: service_started
       mtls-init:
         condition: service_completed_successfully
+      jaeger:
+        condition: service_started
     environment:
       CONTROL_PLANE_GRPC_ADDR: "control-plane:9000"
       WORKER_ID: "worker-1"
@@ -179,6 +202,8 @@ services:
       TLS_CLIENT_CERT: /certs/worker-cert.pem
       TLS_CLIENT_KEY: /certs/worker-key.pem
       TLS_SERVER_NAME: "control-plane"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
+      OTEL_SERVICE_NAME: "worker"
       # Points docker-compose (and any other Docker CLI call this
       # process makes) at the socket-proxy service instead of a raw
       # docker.sock - see the docker-socket-proxy service's own comment

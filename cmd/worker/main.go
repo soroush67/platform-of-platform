@@ -34,10 +34,12 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	pb "platform-of-platform/internal/execution/adapters/grpc/proto"
 	"platform-of-platform/internal/platform/mtls"
+	"platform-of-platform/internal/platform/tracing"
 )
 
 func main() {
@@ -49,6 +51,17 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+
+	tracingShutdown, err := tracing.Setup(ctx, "worker")
+	if err != nil {
+		logger.Error("tracing setup failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := tracingShutdown(context.Background()); err != nil {
+			logger.Error("tracing shutdown failed", "error", err)
+		}
+	}()
 
 	// Real mTLS (internal/platform/mtls) - this Worker presents its own
 	// certificate (TLS_CLIENT_CERT/KEY, signed by the same dev CA the
@@ -66,7 +79,16 @@ func main() {
 		logger.Error("mtls setup failed", "error", err)
 		os.Exit(1)
 	}
-	conn, err := grpc.NewClient(controlPlaneAddr, grpc.WithTransportCredentials(tlsCreds))
+	// otelgrpc.NewClientHandler starts a real span for every RPC this
+	// Worker makes (Register/StreamJobs/ReportJobStatus) and propagates
+	// it over the wire via W3C tracecontext metadata - the Control
+	// Plane's own otelgrpc server handler (cmd/control-plane/main.go)
+	// continues it, making a request's actual HTTP->gRPC path visible as
+	// one trace in Jaeger, not two disconnected per-process spans.
+	conn, err := grpc.NewClient(controlPlaneAddr,
+		grpc.WithTransportCredentials(tlsCreds),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
 	if err != nil {
 		logger.Error("failed to connect to control plane", "error", err)
 		os.Exit(1)

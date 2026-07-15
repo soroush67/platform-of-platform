@@ -21,6 +21,8 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
 	grpcserver "google.golang.org/grpc"
 
@@ -42,6 +44,8 @@ import (
 	"platform-of-platform/internal/platform/idempotency"
 	"platform-of-platform/internal/platform/mtls"
 	"platform-of-platform/internal/platform/outbox"
+	"platform-of-platform/internal/platform/ratelimit"
+	"platform-of-platform/internal/platform/tracing"
 	rbachttp "platform-of-platform/internal/rbac/adapters/http"
 	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	rbacapp "platform-of-platform/internal/rbac/application"
@@ -70,6 +74,17 @@ func main() {
 		logger.Error("migration failed", "error", err)
 		os.Exit(1)
 	}
+
+	tracingShutdown, err := tracing.Setup(context.Background(), "control-plane")
+	if err != nil {
+		logger.Error("tracing setup failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := tracingShutdown(context.Background()); err != nil {
+			logger.Error("tracing shutdown failed", "error", err)
+		}
+	}()
 
 	pool, err := pgxpool.New(context.Background(), cfg.AppDatabaseURL)
 	if err != nil {
@@ -213,10 +228,22 @@ func main() {
 		return key.OwnerID, nil
 	})
 
+	// Rate limiting (docs/architecture's own deferred cross-cutting gap,
+	// built for real now) - loginLimiter is the narrow, high-value
+	// defense (5 attempts/5min per *username*, brute-force/credential-
+	// stuffing specific); generalLimiter (100 req/min per client IP)
+	// wraps the entire mux below, a general abuse backstop every request
+	// pays regardless of which endpoint or whether it's authenticated
+	// yet. Both in-memory, single-instance-only - see
+	// internal/platform/ratelimit's own package comment on why.
+	loginLimiter := ratelimit.New(5, 5*time.Minute)
+	generalLimiter := ratelimit.New(100, time.Minute)
+	rateLimitGC := ratelimit.NewGCLoop(time.Minute, loginLimiter, generalLimiter)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
 	mux.HandleFunc("POST /api/v1/users", identityhttp.CreateUserHandler(createUserService))
-	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, cfg.JWTSigningKey))
+	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, loginLimiter, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/password-reset/request", identityhttp.RequestPasswordResetHandler(passwordResetService))
 	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", identityhttp.ConfirmPasswordResetHandler(passwordResetService))
@@ -257,8 +284,18 @@ func main() {
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}/service-accounts/{sa}/api-keys/{key}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.RevokeAPIKeyHandler(revokeAPIKeyService)))
 
 	server := &http.Server{
-		Addr:    cfg.HTTPAddr,
-		Handler: httpserver.RequestID(mux),
+		Addr: cfg.HTTPAddr,
+		// RequestID outermost - so even a 429 rejection from RateLimit
+		// carries a real request id (useful for correlating abuse across
+		// logs, the exact reason RequestID exists in the first place).
+		// otelhttp.NewHandler is innermost, wrapping the mux directly -
+		// a real span per request that reaches real routing (a
+		// rate-limited 429 is noise, not work worth tracing). This is
+		// the actual "distributed" half of tracing: the span this
+		// creates is what otelgrpc's client interceptor (cmd/worker)
+		// continues across the gRPC call when a request triggers a Run
+		// dispatch - one trace, two processes.
+		Handler: httpserver.RequestID(httpserver.RateLimit(generalLimiter, otelhttp.NewHandler(mux, "control-plane"))),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -286,6 +323,10 @@ func main() {
 	})
 
 	g.Go(func() error {
+		return rateLimitGC.Run(gctx)
+	})
+
+	g.Go(func() error {
 		logger.Info("http server starting", "addr", cfg.HTTPAddr)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
@@ -298,7 +339,11 @@ func main() {
 		logger.Error("mtls setup failed", "error", err)
 		os.Exit(1)
 	}
-	grpcSrv := grpcserver.NewServer(grpcserver.Creds(tlsCreds))
+	// otelgrpc.NewServerHandler continues whatever trace the Worker's own
+	// otelgrpc client interceptor started (cmd/worker/main.go) - real
+	// cross-process span propagation over the actual gRPC connection,
+	// via W3C tracecontext metadata (tracing.Setup's own propagator).
+	grpcSrv := grpcserver.NewServer(grpcserver.Creds(tlsCreds), grpcserver.StatsHandler(otelgrpc.NewServerHandler()))
 	executionpb.RegisterWorkerServiceServer(grpcSrv, grpcWorkerServer)
 	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
 	if err != nil {

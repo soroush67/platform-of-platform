@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"platform-of-platform/internal/identity/application"
 	"platform-of-platform/internal/identity/domain"
 	"platform-of-platform/internal/platform/auth"
 	"platform-of-platform/internal/platform/httpserver"
+	"platform-of-platform/internal/platform/ratelimit"
 )
 
 type createUserRequest struct {
@@ -86,11 +88,26 @@ type loginResponse struct {
 // here on purpose. Also issues a real refresh token now (previously the
 // access token's 15-minute TTL was the only session mechanism at all -
 // POST /auth/refresh, RefreshTokenHandler below, is the actual fix).
-func LoginHandler(svc *application.AuthenticateService, refreshSvc *application.RefreshTokenService, jwtSecret []byte) http.HandlerFunc {
+//
+// loginLimiter is keyed by *username*, not client IP - the general
+// per-IP limiter (httpserver.RateLimit, wrapping the whole mux) already
+// covers "one IP hammering everything"; this is the narrower, more
+// valuable defense for login specifically: credential stuffing spread
+// across many IPs against one account. Every attempt against a username
+// counts against its budget, successful or not - a legitimate user
+// briefly locked out after mistyping a password five times is the
+// accepted tradeoff for actually stopping brute force, not a bug.
+func LoginHandler(svc *application.AuthenticateService, refreshSvc *application.RefreshTokenService, loginLimiter *ratelimit.Limiter, jwtSecret []byte) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		if allowed, retryAfter := loginLimiter.Allow(req.Username); !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter.Seconds())+1))
+			httpserver.WriteProblem(w, http.StatusTooManyRequests, "too many login attempts", "")
 			return
 		}
 
