@@ -216,16 +216,20 @@ func main() {
 	// revocation - APIKey.Valid()), not just "does a row with this hash
 	// exist" - and a real best-effort last_used_at touch on every
 	// successful auth, the same bookkeeping field the doc names.
-	apiKeyResolver := httpserver.APIKeyResolver(func(ctx context.Context, plaintextKey string) (string, error) {
+	apiKeyResolver := httpserver.APIKeyResolver(func(ctx context.Context, plaintextKey string) (string, []string, error) {
 		key, err := apiKeyRepo.GetByHash(ctx, auth.HashOpaqueToken(plaintextKey))
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if !key.Valid() {
-			return "", identitydomain.ErrAPIKeyInvalid
+			return "", nil, identitydomain.ErrAPIKeyInvalid
 		}
 		_ = apiKeyRepo.TouchLastUsed(ctx, key.ID)
-		return key.OwnerID, nil
+		// key.Scopes flows into principal.WithScopes (httpserver.RequireAuth)
+		// and from there into RoleBindingRepository.HasPermissionAtScope's
+		// own real intersection - previously computed and returned by the
+		// API but never actually enforced anywhere.
+		return key.OwnerID, key.Scopes, nil
 	})
 
 	// Rate limiting (docs/architecture's own deferred cross-cutting gap,

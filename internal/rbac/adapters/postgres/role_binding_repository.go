@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"platform-of-platform/internal/platform/principal"
 	"platform-of-platform/internal/rbac/domain"
 )
 
@@ -139,7 +141,23 @@ func (r *RoleBindingRepository) HasPermission(ctx context.Context, organizationI
 // them apart at this layer) AND for any team the subject belongs to
 // (`team_memberships` - a service_account is never a team member, so
 // that subquery is naturally empty for one, not a special case).
+//
+// API key scope intersection (docs/architecture/13-module-identity-
+// rbac-tenancy.md §2: "scopes - optional narrowing below the owner's
+// own RBAC grants") happens first, before any DB round-trip: if the
+// request authenticated via an API key with a real (non-empty) Scopes
+// list (principal.ScopesFromContext, set by httpserver.RequireAuth) and
+// permission isn't in it, this returns false immediately - no RBAC
+// grant, however broad, can widen back past a key's own narrower scope.
+// A JWT-authenticated request, or an API key with an empty Scopes list,
+// carries no restriction here and this check is a pure no-op, exactly
+// the behavior every existing caller already had before API keys could
+// narrow anything.
 func (r *RoleBindingRepository) HasPermissionAtScope(ctx context.Context, organizationID, subjectID, permission string, projectID, workspaceID *string) (bool, error) {
+	if scopes, ok := principal.ScopesFromContext(ctx); ok && !slices.Contains(scopes, permission) {
+		return false, nil
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return false, err
