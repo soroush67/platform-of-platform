@@ -31,7 +31,7 @@ func (s *Server) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.Reg
 	if req.WorkerId == "" {
 		return nil, status.Error(codes.InvalidArgument, "worker_id is required")
 	}
-	s.registry.register(req.WorkerId, req.SupportedEngines, req.ActiveRunIds)
+	s.registry.register(ctx, req.WorkerId, req.SupportedEngines, req.ActiveRunIds)
 	return &pb.RegisterResponse{Accepted: true}, nil
 }
 

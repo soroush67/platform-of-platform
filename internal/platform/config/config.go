@@ -71,6 +71,17 @@ type Config struct {
 	// verification, set via env" posture as RunReaperInterval/
 	// OrgPurgeReaperInterval above.
 	IdempotencyReaperInterval time.Duration
+	// RedisAddr is the multi-instance HA coordination store
+	// (internal/execution/adapters/grpc's Registry - runID/Worker
+	// routing shared across Control Plane replicas, docs/architecture/
+	// 05-database.md §5's own "cache/coordination, never
+	// system-of-record" role for Redis). Required, no in-memory
+	// fallback - a Registry silently falling back to process-local-only
+	// routing would be exactly the "looks like it works, actually
+	// doesn't span replicas" failure mode this config existing to
+	// enforce is meant to prevent, same "fail closed" posture already
+	// applied to the TLS cert trio below.
+	RedisAddr string
 }
 
 func Load() (Config, error) {
@@ -112,6 +123,7 @@ func Load() (Config, error) {
 		OrgPurgeAfter:             orgPurgeAfter,
 		OrgPurgeReaperInterval:    orgPurgeReaperInterval,
 		IdempotencyReaperInterval: idempotencyReaperInterval,
+		RedisAddr:                 os.Getenv("REDIS_ADDR"),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -125,6 +137,9 @@ func Load() (Config, error) {
 	}
 	if cfg.TLSCACert == "" || cfg.TLSServerCert == "" || cfg.TLSServerKey == "" {
 		return Config{}, fmt.Errorf("config: TLS_CA_CERT, TLS_SERVER_CERT, and TLS_SERVER_KEY are all required - the Worker gRPC channel has no insecure fallback")
+	}
+	if cfg.RedisAddr == "" {
+		return Config{}, fmt.Errorf("config: REDIS_ADDR is required - the Worker Registry has no in-memory-only fallback for multi-instance routing")
 	}
 
 	return cfg, nil

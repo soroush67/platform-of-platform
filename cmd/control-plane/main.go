@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/cockroachdb"
@@ -108,6 +109,26 @@ func main() {
 	}
 	defer rootPool.Close()
 
+	// redisClient backs the Worker Registry's multi-instance HA routing
+	// (internal/execution/adapters/grpc's own doc comment) - shared,
+	// cross-replica runID/Worker-ownership state, the "cache/
+	// coordination, never system-of-record" role docs/architecture/
+	// 05-database.md §5 reserves for Redis. instanceID identifies this
+	// replica: os.Hostname() returns Docker's own real, random
+	// per-container ID by default, a genuine unique identity with no
+	// extra coordination needed to obtain one.
+	redisClient := redis.NewClient(&redis.Options{Addr: cfg.RedisAddr})
+	defer redisClient.Close()
+	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+		logger.Error("redis connect failed", "error", err)
+		os.Exit(1)
+	}
+	instanceID, err := os.Hostname()
+	if err != nil {
+		logger.Error("failed to determine this instance's own hostname", "error", err)
+		os.Exit(1)
+	}
+
 	roleRepo := rbacpg.NewRoleRepository(pool)
 	if err := roleRepo.SeedBuiltinRoles(context.Background()); err != nil {
 		logger.Error("role seeding failed", "error", err)
@@ -166,7 +187,7 @@ func main() {
 	// Execution's own WorkerDispatcher/WorkerCanceler ports, same "one
 	// concrete type satisfies several ports" pattern already used for
 	// roleBindingRepo/workspaceRepo).
-	workerRegistry := executiongrpc.NewRegistry()
+	workerRegistry := executiongrpc.NewRegistry(instanceID, redisClient, logger)
 
 	runRepo := executionpg.NewRunRepository(pool)
 	triggerRunService := executionapp.NewTriggerRunService(runRepo, workspaceRepo, workspaceRepo, roleBindingRepo, orgRepo)
@@ -348,6 +369,14 @@ func main() {
 
 	g.Go(func() error {
 		return rateLimitGC.Run(gctx)
+	})
+
+	g.Go(func() error {
+		return workerRegistry.SubscribeCancelForwarding(gctx)
+	})
+
+	g.Go(func() error {
+		return workerRegistry.Heartbeat(gctx)
 	})
 
 	g.Go(func() error {

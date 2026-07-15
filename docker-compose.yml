@@ -102,6 +102,16 @@ services:
     ports:
       - "16686:16686"
 
+  # Multi-instance Control Plane HA coordination store (internal/
+  # execution/adapters/grpc's Registry - runID/Worker routing shared
+  # across replicas, docs/architecture/05-database.md §5's own "cache/
+  # coordination, never system-of-record" role) - not persisted to a
+  # volume, matching that role: losing it just means every replica's
+  # cross-instance Cancel routing resets, the same as a fresh boot,
+  # never the loss of any authoritative state (that's still CockroachDB).
+  redis:
+    image: redis:7-alpine
+
   control-plane:
     build:
       context: .
@@ -113,6 +123,8 @@ services:
         condition: service_completed_successfully
       jaeger:
         condition: service_started
+      redis:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://root@cockroach-0:26257/platform?sslmode=disable
       APP_DATABASE_URL: postgresql://platform_app@cockroach-0:26257/platform?sslmode=disable
@@ -123,6 +135,7 @@ services:
       TLS_SERVER_KEY: /certs/server-key.pem
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://jaeger:4318"
       OTEL_SERVICE_NAME: "control-plane"
+      REDIS_ADDR: "redis:6379"
       # Dev-only bootstrap secret (docs/architecture/21-deployment.md §1's
       # own MASTER_KEY framing) - a real deployment sources this from a
       # real secret store, not a compose file default.
