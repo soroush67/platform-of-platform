@@ -29,8 +29,7 @@ func TestOrganizationRepository_CreateAndGetByID(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	got, err := repo.GetByID(ctx, org.ID)
@@ -82,8 +81,7 @@ func TestOrganizationRepository_ArchiveAndIsArchived(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	archived, err := repo.IsArchived(ctx, org.ID)
@@ -175,8 +173,7 @@ func TestOrganizationRepository_FindOrganizationsPastPurgeWindow(t *testing.T) {
 	t.Cleanup(func() {
 		for _, id := range []string{pastWindowOrg.ID, recentlyArchivedOrg.ID} {
 			mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, id)
-			mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, id)
-			mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, id)
+			dbtest.DeleteOrganization(t, root, id)
 		}
 	})
 
@@ -230,9 +227,8 @@ func TestOrganizationRepository_Purge(t *testing.T) {
 	// already removed these rows.
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
 		mustExec(t, root, `DELETE FROM projects WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	if err := orgRepo.Purge(ctx, org.ID); err != nil {

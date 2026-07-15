@@ -28,7 +28,12 @@ func TestOutboxAtomicity_RollbackDropsBothRowAndEvent(t *testing.T) {
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, orgID)
 		mustExec(t, root, `DELETE FROM projects WHERE organization_id = $1`, orgID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, orgID)
+		// dbtest.DeleteOrganization, not a plain DELETE - see its own doc
+		// comment: closes a real TOCTOU race against the live compose
+		// stack's own control-plane container (shares this database, runs
+		// its own real Outbox Relay) that a fixed delete ordering alone
+		// can't close.
+		dbtest.DeleteOrganization(t, root, orgID)
 	})
 
 	projectID := uuid.NewString()
@@ -117,7 +122,7 @@ func TestOutboxRelay_PublishesCommittedEvent(t *testing.T) {
 	mustExec(t, root, `INSERT INTO organizations (id, name, slug) VALUES ($1, 'outbox-relay-org', $2)`, orgID, "outbox-relay-org-"+orgID[:8])
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, orgID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, orgID)
+		dbtest.DeleteOrganization(t, root, orgID)
 	})
 
 	tx, err := root.Begin(ctx)

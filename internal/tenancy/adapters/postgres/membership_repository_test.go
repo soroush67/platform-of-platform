@@ -34,9 +34,8 @@ func TestMembershipRepository_CreateAndIsMember(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
 		mustExec(t, root, `DELETE FROM organization_memberships WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	isMember, err := membershipRepo.IsMember(ctx, org.ID, memberID)
@@ -91,9 +90,8 @@ func TestMembershipRepository_IsMember_RecognizesServiceAccounts(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
 		mustExec(t, root, `DELETE FROM service_accounts WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	saID := uuid.NewString()

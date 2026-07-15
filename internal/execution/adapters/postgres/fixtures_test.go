@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"platform-of-platform/internal/platform/dbtest"
 )
 
 func mustExec(t *testing.T, pool *pgxpool.Pool, sql string, args ...any) {
@@ -41,22 +43,17 @@ func insertOrgProjectWorkspace(t *testing.T, root *pgxpool.Pool) (orgID, workspa
 		// registering their own cleanup - deleting both here first,
 		// scoped by organization_id, is what lets the workspace delete
 		// below succeed instead of hitting runs_workspace_id_fkey.
-		//
-		// audit_entries is deleted too, before organizations - the live
-		// compose stack's real control-plane container shares this same
-		// database and runs its own real Outbox Relay, which can record a
-		// genuine audit_entries row for these test orgs' RunQueued/
-		// RunApplying events independently of anything this test does.
-		// Found for real: without this, the organizations delete below
-		// intermittently fails audit_entries_organization_id_fkey
-		// whenever that real Relay wins the race (same class of bug fixed
-		// once already in execution/application/reap_stale_runs_test.go).
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, orgID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, orgID)
 		mustExec(t, root, `DELETE FROM runs WHERE organization_id = $1`, orgID)
 		mustExec(t, root, `DELETE FROM workspaces WHERE id = $1`, workspaceID)
 		mustExec(t, root, `DELETE FROM projects WHERE id = $1`, projectID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, orgID)
+		// dbtest.DeleteOrganization (not a plain DELETE) - see its own
+		// doc comment: the live compose stack's real control-plane
+		// container shares this database and can record a genuine new
+		// audit_entries row for this org between a plain delete-then-
+		// delete pair, a real TOCTOU race a fixed ordering alone can't
+		// close.
+		dbtest.DeleteOrganization(t, root, orgID)
 	})
 	return orgID, workspaceID
 }

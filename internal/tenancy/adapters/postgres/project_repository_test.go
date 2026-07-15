@@ -27,9 +27,8 @@ func setupProjectTest(t *testing.T) (*tenancypg.OrganizationRepository, *tenancy
 	}
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
 		mustExec(t, root, `DELETE FROM projects WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	return orgRepo, projectRepo, org

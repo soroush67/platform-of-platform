@@ -27,10 +27,9 @@ func setupTeamTest(t *testing.T) (*tenancypg.TeamRepository, *domain.Organizatio
 	}
 	t.Cleanup(func() {
 		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, org.ID)
 		mustExec(t, root, `DELETE FROM team_memberships WHERE organization_id = $1`, org.ID)
 		mustExec(t, root, `DELETE FROM teams WHERE organization_id = $1`, org.ID)
-		mustExec(t, root, `DELETE FROM organizations WHERE id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
 	})
 
 	return teamRepo, org, actorID
