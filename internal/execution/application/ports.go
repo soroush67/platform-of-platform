@@ -133,3 +133,18 @@ type WorkerDispatcher interface {
 type WorkerCanceler interface {
 	CancelJob(ctx context.Context, runID string) (bool, error)
 }
+
+// RunTracker is WorkerReportService's and StaleRunReaperService's own
+// port into the gRPC adapter's Registry - closes the "runToWorker grows
+// unboundedly" gap the Registry's own doc comment used to name:
+// CancelJob already forgets its own routing entry, but a Run that
+// completes normally (a real Worker report) or gets reaped (a Worker
+// that died mid-Job and never reported) previously left its entry
+// behind forever. Forget is a plain, error-free cleanup call - there's
+// nothing a caller could usefully do differently if the entry was
+// already gone (Run never dispatched, or already forgotten by another
+// path), so this deliberately isn't shaped like every other (bool,
+// error) cross-context check in this codebase.
+type RunTracker interface {
+	Forget(runID string)
+}

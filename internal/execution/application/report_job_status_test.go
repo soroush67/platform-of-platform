@@ -20,7 +20,8 @@ func TestWorkerReportService_AppliedMarksRunAppliedAndUnlocks(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)
 	run := applyingRun(locker, runRepo)
-	svc := application.NewWorkerReportService(runRepo, locker)
+	tracker := newFakeRunTracker()
+	svc := application.NewWorkerReportService(runRepo, locker, tracker)
 
 	err := svc.HandleReport(context.Background(), testOrgID, run.ID, testWorkspaceID, "applied", "all good", "")
 	if err != nil {
@@ -36,13 +37,17 @@ func TestWorkerReportService_AppliedMarksRunAppliedAndUnlocks(t *testing.T) {
 	if locker.isLocked(testWorkspaceID) {
 		t.Error("expected the workspace lock to be released")
 	}
+	if !tracker.wasForgotten(run.ID) {
+		t.Error("expected the run's Cancel-routing entry to be forgotten on real completion")
+	}
 }
 
 func TestWorkerReportService_FailedMarksRunFailedWithCombinedOutput(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)
 	run := applyingRun(locker, runRepo)
-	svc := application.NewWorkerReportService(runRepo, locker)
+	tracker := newFakeRunTracker()
+	svc := application.NewWorkerReportService(runRepo, locker, tracker)
 
 	err := svc.HandleReport(context.Background(), testOrgID, run.ID, testWorkspaceID, "failed", "step 3 running", "exit code 1")
 	if err != nil {
@@ -56,13 +61,16 @@ func TestWorkerReportService_FailedMarksRunFailedWithCombinedOutput(t *testing.T
 	if got.ApplyOutputRef == nil || *got.ApplyOutputRef != want {
 		t.Errorf("expected combined output %q, got %v", want, got.ApplyOutputRef)
 	}
+	if !tracker.wasForgotten(run.ID) {
+		t.Error("expected the run's Cancel-routing entry to be forgotten on real completion")
+	}
 }
 
 func TestWorkerReportService_DuplicateReportOnATerminalRunIsANoOp(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)
 	run := applyingRun(locker, runRepo)
-	svc := application.NewWorkerReportService(runRepo, locker)
+	svc := application.NewWorkerReportService(runRepo, locker, newFakeRunTracker())
 
 	if err := svc.HandleReport(context.Background(), testOrgID, run.ID, testWorkspaceID, "applied", "done", ""); err != nil {
 		t.Fatalf("first HandleReport: %v", err)
@@ -82,7 +90,7 @@ func TestWorkerReportService_UnknownStatusRejected(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)
 	run := applyingRun(locker, runRepo)
-	svc := application.NewWorkerReportService(runRepo, locker)
+	svc := application.NewWorkerReportService(runRepo, locker, newFakeRunTracker())
 
 	err := svc.HandleReport(context.Background(), testOrgID, run.ID, testWorkspaceID, "not-a-real-status", "", "")
 	if _, ok := err.(*domain.ValidationError); !ok {

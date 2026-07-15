@@ -93,6 +93,21 @@ func main() {
 	}
 	defer pool.Close()
 
+	// rootPool - the same role migrations use (cfg.DatabaseURL, not
+	// cfg.AppDatabaseURL) - exists at runtime for exactly one reason:
+	// idempotency.Reaper's cleanup sweep is a genuine cross-org DELETE
+	// against a table (idempotency_keys) that, unlike outbox_events, DOES
+	// have FORCE ROW LEVEL SECURITY, so platform_app has no way to see
+	// across every org's rows in one query (see Reaper's own doc comment
+	// for the full reasoning, and Purge's own comment for the same class
+	// of bug found for real when this was missed once already).
+	rootPool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("root db pool init failed", "error", err)
+		os.Exit(1)
+	}
+	defer rootPool.Close()
+
 	roleRepo := rbacpg.NewRoleRepository(pool)
 	if err := roleRepo.SeedBuiltinRoles(context.Background()); err != nil {
 		logger.Error("role seeding failed", "error", err)
@@ -158,8 +173,8 @@ func main() {
 	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo, workerRegistry)
 	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
 	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
-	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo)
-	staleRunReaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, cfg.RunStaleAfter, cfg.RunReaperInterval, logger)
+	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo, workerRegistry)
+	staleRunReaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, workerRegistry, cfg.RunStaleAfter, cfg.RunReaperInterval, logger)
 	purgeReaper := tenancyapp.NewPurgeReaperService(orgRepo, cfg.OrgPurgeAfter, cfg.OrgPurgeReaperInterval, logger)
 
 	variableRepo := variablespg.NewVariableRepository(pool)
@@ -273,6 +288,7 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.ListWorkspacesHandler(listWorkspacesService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.GetWorkspaceHandler(getWorkspaceService)))
 	idempotencyStore := idempotency.NewStore(pool)
+	idempotencyReaper := idempotency.NewReaper(rootPool, cfg.IdempotencyReaperInterval, logger)
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, idempotency.Middleware(idempotencyStore, executionhttp.TriggerRunHandler(triggerRunService))))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, executionhttp.ListRunsHandler(listRunsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, executionhttp.GetRunHandler(getRunService)))
@@ -324,6 +340,10 @@ func main() {
 
 	g.Go(func() error {
 		return purgeReaper.Run(gctx)
+	})
+
+	g.Go(func() error {
+		return idempotencyReaper.Run(gctx)
 	})
 
 	g.Go(func() error {

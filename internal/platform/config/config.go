@@ -63,6 +63,14 @@ type Config struct {
 	// RunStaleAfter/RunReaperInterval above.
 	OrgPurgeAfter          time.Duration
 	OrgPurgeReaperInterval time.Duration
+	// IdempotencyReaperInterval configures the Idempotency-Key Reaper
+	// (internal/platform/idempotency/reaper.go) - how often it sweeps
+	// idempotency_keys for rows past idempotency.Window (a fixed 24h,
+	// not configurable - docs/architecture/04-api-design.md §5's own
+	// contract value, not a tunable). Same "small value for real
+	// verification, set via env" posture as RunReaperInterval/
+	// OrgPurgeReaperInterval above.
+	IdempotencyReaperInterval time.Duration
 }
 
 func Load() (Config, error) {
@@ -84,21 +92,26 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("config: ORG_PURGE_REAPER_INTERVAL: %w", err)
 	}
+	idempotencyReaperInterval, err := time.ParseDuration(getenvDefault("IDEMPOTENCY_REAPER_INTERVAL", "1h"))
+	if err != nil {
+		return Config{}, fmt.Errorf("config: IDEMPOTENCY_REAPER_INTERVAL: %w", err)
+	}
 
 	cfg := Config{
-		DatabaseURL:            os.Getenv("DATABASE_URL"),
-		AppDatabaseURL:         os.Getenv("APP_DATABASE_URL"),
-		HTTPAddr:               getenvDefault("HTTP_ADDR", ":8443"),
-		GRPCAddr:               getenvDefault("GRPC_ADDR", ":9000"),
-		InitialAdminEmail:      os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
-		JWTSigningKey:          []byte(jwtKey),
-		RunStaleAfter:          staleAfter,
-		RunReaperInterval:      reaperInterval,
-		TLSCACert:              os.Getenv("TLS_CA_CERT"),
-		TLSServerCert:          os.Getenv("TLS_SERVER_CERT"),
-		TLSServerKey:           os.Getenv("TLS_SERVER_KEY"),
-		OrgPurgeAfter:          orgPurgeAfter,
-		OrgPurgeReaperInterval: orgPurgeReaperInterval,
+		DatabaseURL:               os.Getenv("DATABASE_URL"),
+		AppDatabaseURL:            os.Getenv("APP_DATABASE_URL"),
+		HTTPAddr:                  getenvDefault("HTTP_ADDR", ":8443"),
+		GRPCAddr:                  getenvDefault("GRPC_ADDR", ":9000"),
+		InitialAdminEmail:         os.Getenv("INITIAL_PLATFORM_ADMIN_EMAIL"),
+		JWTSigningKey:             []byte(jwtKey),
+		RunStaleAfter:             staleAfter,
+		RunReaperInterval:         reaperInterval,
+		TLSCACert:                 os.Getenv("TLS_CA_CERT"),
+		TLSServerCert:             os.Getenv("TLS_SERVER_CERT"),
+		TLSServerKey:              os.Getenv("TLS_SERVER_KEY"),
+		OrgPurgeAfter:             orgPurgeAfter,
+		OrgPurgeReaperInterval:    orgPurgeReaperInterval,
+		IdempotencyReaperInterval: idempotencyReaperInterval,
 	}
 
 	if cfg.DatabaseURL == "" {

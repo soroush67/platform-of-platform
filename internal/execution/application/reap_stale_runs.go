@@ -25,13 +25,14 @@ import (
 type StaleRunReaperService struct {
 	runRepo    RunRepository
 	locker     WorkspaceLocker
+	tracker    RunTracker
 	staleAfter time.Duration
 	interval   time.Duration
 	logger     *slog.Logger
 }
 
-func NewStaleRunReaperService(runRepo RunRepository, locker WorkspaceLocker, staleAfter, interval time.Duration, logger *slog.Logger) *StaleRunReaperService {
-	return &StaleRunReaperService{runRepo: runRepo, locker: locker, staleAfter: staleAfter, interval: interval, logger: logger}
+func NewStaleRunReaperService(runRepo RunRepository, locker WorkspaceLocker, tracker RunTracker, staleAfter, interval time.Duration, logger *slog.Logger) *StaleRunReaperService {
+	return &StaleRunReaperService{runRepo: runRepo, locker: locker, tracker: tracker, staleAfter: staleAfter, interval: interval, logger: logger}
 }
 
 func (s *StaleRunReaperService) Run(ctx context.Context) error {
@@ -78,6 +79,13 @@ func (s *StaleRunReaperService) reapOnce(ctx context.Context) error {
 			s.logger.Error("reaped run but failed to unlock workspace", "run_id", c.RunID, "workspace_id", c.WorkspaceID, "error", err)
 			continue
 		}
+
+		// A crashed Worker never reports back, so WorkerReportService's
+		// own Forget call never fires for this Run - this is the only
+		// place that would ever happen for a reaped Run, closing the
+		// same runToWorker leak WorkerReportService closes for the
+		// normal-completion case (see RunTracker's own doc comment).
+		s.tracker.Forget(c.RunID)
 
 		s.logger.Info("reaped stale run", "run_id", c.RunID, "organization_id", c.OrganizationID, "workspace_id", c.WorkspaceID)
 	}

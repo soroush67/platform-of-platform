@@ -31,15 +31,15 @@ type Registry struct {
 	workers map[string]*workerEntry
 	// runToWorker routes a later CancelJob back to whichever Worker is
 	// currently running it - populated by Dispatch, consulted (and
-	// opportunistically cleared) by CancelJob. Known, flagged gap: an
-	// entry for a Run that completes *without* ever being canceled is
-	// never removed, so this map grows by one per successfully-dispatched
-	// Run for the life of the process - real, bounded by actual Run
-	// volume rather than unbounded, and not fixed here since this
-	// walking skeleton doesn't yet have a natural "Run finished" hook
-	// this adapter can observe (that lives in the application layer's
-	// WorkerReportService, which has no reference back into this
-	// Registry).
+	// opportunistically cleared) by CancelJob. Previously a known, flagged
+	// gap: an entry for a Run that completes *without* ever being
+	// canceled was never removed. Now closed via Forget below, called
+	// from both real "this Run just reached a terminal status" hooks the
+	// application layer has: WorkerReportService (applied/failed, a real
+	// Worker report) and StaleRunReaperService (errored, a Worker that
+	// died mid-Job and never reported at all) - between CancelJob's own
+	// delete and these two, every path a Run can take out of `applying`
+	// now forgets its routing entry.
 	runToWorker map[string]string
 }
 
@@ -159,4 +159,17 @@ func (r *Registry) CancelJob(ctx context.Context, runID string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// Forget implements Execution's own RunTracker port
+// (internal/execution/application/ports.go) - removes runID's routing
+// entry once the application layer has independently confirmed the Run
+// reached a terminal status by some path other than Cancel (which
+// already deletes its own entry above). A harmless no-op if no entry
+// exists (e.g. the Run never reached a Worker in the first place, or
+// was already forgotten).
+func (r *Registry) Forget(runID string) {
+	r.mu.Lock()
+	delete(r.runToWorker, runID)
+	r.mu.Unlock()
 }

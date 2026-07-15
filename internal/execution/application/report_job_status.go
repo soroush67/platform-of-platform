@@ -17,10 +17,11 @@ import (
 type WorkerReportService struct {
 	runRepo RunRepository
 	locker  WorkspaceLocker
+	tracker RunTracker
 }
 
-func NewWorkerReportService(runRepo RunRepository, locker WorkspaceLocker) *WorkerReportService {
-	return &WorkerReportService{runRepo: runRepo, locker: locker}
+func NewWorkerReportService(runRepo RunRepository, locker WorkspaceLocker, tracker RunTracker) *WorkerReportService {
+	return &WorkerReportService{runRepo: runRepo, locker: locker, tracker: tracker}
 }
 
 func (s *WorkerReportService) HandleReport(ctx context.Context, organizationID, runID, workspaceID, reportedStatus, logLine, errorMessage string) error {
@@ -76,6 +77,11 @@ func (s *WorkerReportService) HandleReport(ctx context.Context, organizationID, 
 	if err := s.runRepo.Update(ctx, run, "system"); err != nil {
 		return err
 	}
+
+	// This Run just reached a real terminal status via a genuine Worker
+	// report - forget its Cancel-routing entry (see RunTracker's own doc
+	// comment on why this, not just CancelJob, has to call Forget too).
+	s.tracker.Forget(run.ID)
 
 	return s.locker.Unlock(ctx, organizationID, workspaceID, run.ID)
 }

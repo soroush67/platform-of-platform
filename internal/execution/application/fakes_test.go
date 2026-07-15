@@ -296,3 +296,24 @@ func (f *fakeWorkerCanceler) CancelJob(ctx context.Context, runID string) (bool,
 	f.canceled = append(f.canceled, runID)
 	return true, nil
 }
+
+type fakeRunTracker struct {
+	mu        sync.Mutex
+	forgotten map[string]bool
+}
+
+func newFakeRunTracker() *fakeRunTracker {
+	return &fakeRunTracker{forgotten: map[string]bool{}}
+}
+
+func (f *fakeRunTracker) Forget(runID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgotten[runID] = true
+}
+
+func (f *fakeRunTracker) wasForgotten(runID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.forgotten[runID]
+}

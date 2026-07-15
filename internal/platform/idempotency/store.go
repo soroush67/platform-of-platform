@@ -11,10 +11,25 @@ package idempotency
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// Window is the idempotency cache lifetime (docs/architecture/
+// 04-api-design.md §5's "24h") - the single source of truth both Get's
+// own staleness filter and Reaper's cleanup sweep (reaper.go) compute
+// their cutoff from. Previously a bare '24 hours' literal baked
+// straight into Get's SQL (Duration.String() - "24h0m0s" - isn't valid
+// Postgres/CockroachDB interval syntax, so it couldn't just be
+// Sprintf'd in); keeping it as one Go constant and passing the computed
+// cutoff as a real parameter is what makes it safe for Reaper to exist
+// at all - a second, independently-typed copy of "24 hours" in two
+// files would risk drifting out of sync, and Reaper deleting a row Get
+// would still consider fresh would be a real, silent user-facing bug
+// (a legitimate retry inside the window suddenly re-executing).
+const Window = 24 * time.Hour
 
 // CachedResponse is what Get returns for a key that was already used -
 // exactly what the first request's handler actually produced, replayed
@@ -33,9 +48,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 // Get returns (nil, nil) if this key has never been used, or has aged
-// out of the 24h window (docs/architecture/04-api-design.md §5) - rows
-// past the window aren't deleted, just ignored by this query's own
-// created_at filter (see the migration's own comment on why).
+// out of Window - rows past the window aren't deleted by this method,
+// just ignored by this query's own created_at filter; Reaper is what
+// actually deletes them (see its own doc comment).
 func (s *Store) Get(ctx context.Context, organizationID, userID, key string) (*CachedResponse, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -47,16 +62,13 @@ func (s *Store) Get(ctx context.Context, organizationID, userID, key string) (*C
 		return nil, err
 	}
 
-	// 24h window (docs/architecture/04-api-design.md §5) - a literal in
-	// the query, not a parameterized Go time.Duration: Duration.String()
-	// ("24h0m0s") isn't standard Postgres/CockroachDB interval syntax,
-	// verified for real before committing to this rather than assumed.
+	cutoff := time.Now().Add(-Window)
 	var resp CachedResponse
 	err = tx.QueryRow(ctx,
 		`SELECT response_status, response_body FROM idempotency_keys
 		 WHERE organization_id = $1 AND requesting_user_id = $2 AND idempotency_key = $3
-		   AND created_at > now() - interval '24 hours'`,
-		organizationID, userID, key,
+		   AND created_at > $4`,
+		organizationID, userID, key, cutoff,
 	).Scan(&resp.Status, &resp.Body)
 	if err != nil {
 		if err == pgx.ErrNoRows {

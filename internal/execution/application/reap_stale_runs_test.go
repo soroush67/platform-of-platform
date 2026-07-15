@@ -40,6 +40,16 @@ func TestStaleRunReaper_ReclaimsAbandonedRun(t *testing.T) {
 	mustExecReaper(t, root, `INSERT INTO organizations (id, name, slug) VALUES ($1, 'reaper-test-org', $2)`, orgID, "reaper-test-org-"+orgID[:8])
 	t.Cleanup(func() {
 		mustExecReaper(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, orgID)
+		// The live control-plane container (docker-compose) shares this
+		// same database and runs its own real Outbox Relay - the
+		// RunApplying/RunQueued events this test's own code writes get
+		// consumed by that real RecordEntryService independently of
+		// anything this test does, producing real audit_entries rows
+		// that reference orgID. Found for real: without this delete, the
+		// organizations delete below fails its own FK constraint
+		// whenever the compose stack's control-plane happens to win that
+		// race (audit_entries_organization_id_fkey).
+		mustExecReaper(t, root, `DELETE FROM audit_entries WHERE organization_id = $1`, orgID)
 		mustExecReaper(t, root, `DELETE FROM runs WHERE organization_id = $1`, orgID)
 		mustExecReaper(t, root, `DELETE FROM workspaces WHERE organization_id = $1`, orgID)
 		mustExecReaper(t, root, `DELETE FROM projects WHERE organization_id = $1`, orgID)
@@ -91,7 +101,8 @@ func TestStaleRunReaper_ReclaimsAbandonedRun(t *testing.T) {
 	// No MarkApplied/MarkFailed ever follows - the Worker's silence is
 	// simulated by simply doing nothing, the same as a real crash would.
 
-	reaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, 200*time.Millisecond, 100*time.Millisecond, slog.Default())
+	tracker := newFakeRunTracker()
+	reaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, tracker, 200*time.Millisecond, 100*time.Millisecond, slog.Default())
 	reaperCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	go reaper.Run(reaperCtx)
@@ -119,7 +130,17 @@ func TestStaleRunReaper_ReclaimsAbandonedRun(t *testing.T) {
 
 	// The other half of reapOnce's real work: the Workspace lock must
 	// actually be released, not just the Run's own status flipped - a
-	// second TryLock on the same workspace must now succeed.
+	// second TryLock on the same workspace must now succeed. Deliberately
+	// checked before the tracker.wasForgotten assertion below: reapOnce
+	// calls Unlock, then Forget, strictly in that program order within
+	// the same synchronous call, but the polling loop above only proves
+	// the *status* write (which happens even earlier, via
+	// MarkErroredIfStillApplying) landed - there's a real window where
+	// the goroutine running reapOnce hasn't reached Unlock/Forget yet
+	// even though the status is already visible. This second TryLock's
+	// own real DB round trip is what gives that goroutine time to
+	// actually get there, the same way the original version of this test
+	// already relied on for Unlock alone before Forget existed.
 	otherRun, err := executiondomain.NewRun(orgID, ws.ID, userID)
 	if err != nil {
 		t.Fatalf("NewRun (second): %v", err)
@@ -133,6 +154,10 @@ func TestStaleRunReaper_ReclaimsAbandonedRun(t *testing.T) {
 	}
 	if !relocked {
 		t.Fatal("expected the Workspace lock to be released by the Reaper - a second TryLock should have succeeded")
+	}
+
+	if !tracker.wasForgotten(run.ID) {
+		t.Error("expected the reaper to forget the abandoned run's Cancel-routing entry too, not just unlock its workspace")
 	}
 }
 
