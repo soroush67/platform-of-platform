@@ -60,6 +60,37 @@ func (f *fakeOrgRepo) put(org *domain.Organization) {
 	f.orgs[org.ID] = &cp
 }
 
+// fakeRootMembershipRepo backs RootMembershipRepository - stores
+// memberships keyed by userID directly (unlike fakeMembershipRepo above,
+// which is keyed by "orgID|userID" pairs for IsMember lookups), since
+// ListOrganizationsForUser's own access pattern is "give me every org
+// for this one user," not "is this one user in this one org."
+type fakeRootMembershipRepo struct {
+	mu           sync.Mutex
+	orgsByUserID map[string][]*domain.Organization
+	err          error
+}
+
+func newFakeRootMembershipRepo() *fakeRootMembershipRepo {
+	return &fakeRootMembershipRepo{orgsByUserID: map[string][]*domain.Organization{}}
+}
+
+func (f *fakeRootMembershipRepo) ListOrganizationsForUser(ctx context.Context, userID string) ([]*domain.Organization, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.orgsByUserID[userID], nil
+}
+
+func (f *fakeRootMembershipRepo) addMembership(userID string, org *domain.Organization) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *org
+	f.orgsByUserID[userID] = append(f.orgsByUserID[userID], &cp)
+}
+
 type fakeMembershipRepo struct {
 	mu      sync.Mutex
 	members map[string]bool // "orgID|userID" -> true

@@ -93,6 +93,28 @@ func (f *fakeOrgRepo) put(org *domain.Organization) {
 	f.orgs[org.ID] = &cp
 }
 
+type fakeRootMembershipRepo struct {
+	mu           sync.Mutex
+	orgsByUserID map[string][]*domain.Organization
+}
+
+func newFakeRootMembershipRepo() *fakeRootMembershipRepo {
+	return &fakeRootMembershipRepo{orgsByUserID: map[string][]*domain.Organization{}}
+}
+
+func (f *fakeRootMembershipRepo) ListOrganizationsForUser(ctx context.Context, userID string) ([]*domain.Organization, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.orgsByUserID[userID], nil
+}
+
+func (f *fakeRootMembershipRepo) addMembership(userID string, org *domain.Organization) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *org
+	f.orgsByUserID[userID] = append(f.orgsByUserID[userID], &cp)
+}
+
 type fakeMembershipRepo struct {
 	mu      sync.Mutex
 	members map[string]bool

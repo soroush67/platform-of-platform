@@ -64,6 +64,25 @@ type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
 
+// RootMembershipRepository is a deliberately separate port from
+// MembershipRepository above - ListOrganizationsForUser ("every org
+// this user belongs to") is a genuine cross-org read with no single
+// organization_id to scope RLS to in advance (organization_memberships
+// and organizations both have FORCE ROW LEVEL SECURITY, scoped by
+// app.current_org_id, per migrations/0001_init.up.sql) - the normal
+// app-pool-backed MembershipRepository would silently see zero rows,
+// not error. This needs the same root-connection exception
+// internal/platform/idempotency/reaper.go's own doc comment already
+// establishes for exactly this class of problem (idempotency_keys also
+// has FORCE RLS and is also genuinely cross-org). Safe specifically
+// because the query is always filtered by the caller's own JWT-derived
+// user_id (httpserver.UserIDFromContext), never a client-supplied
+// value - it cannot be used to enumerate any other user's org
+// memberships, unlike a hypothetical `GET /orgs?user_id=` would be.
+type RootMembershipRepository interface {
+	ListOrganizationsForUser(ctx context.Context, userID string) ([]*domain.Organization, error)
+}
+
 // ProjectRepository - same shape/reasoning as OrganizationRepository.
 type ProjectRepository interface {
 	Create(ctx context.Context, project *domain.Project) error

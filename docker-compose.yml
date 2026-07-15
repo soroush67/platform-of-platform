@@ -216,6 +216,23 @@ services:
       # by this remap.
       - "9100:9000"
 
+  # Web UI (docs/architecture/16-web-ui.md) - React+TS+Vite build served
+  # by nginx, same two-stage build + reverse-proxy pattern as the
+  # operator's own compose-platform frontend this session (web/nginx.conf's
+  # own comment has the details). No environment block: control-plane:8443
+  # is baked into nginx.conf at image-build time, and this design means
+  # zero CORS code exists anywhere in the Go backend - nginx makes every
+  # /api/ call same-origin from the browser's perspective.
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    depends_on:
+      control-plane:
+        condition: service_started
+    ports:
+      - "3000:80"
+
   # Per-Job isolation, partial (docs/architecture/17-workers.md §4 gap) -
   # the raw host docker.sock is mounted into THIS container only, never
   # into the Worker. The Worker (and therefore any Job's docker-compose

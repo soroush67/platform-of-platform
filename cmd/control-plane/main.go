@@ -155,6 +155,12 @@ func main() {
 	teamRepo := tenancypg.NewTeamRepository(pool)
 	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo)
 	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo, membershipRepo)
+	// rootMembershipRepo - a deliberately separate, root-connection-backed
+	// repository used ONLY for ListMyOrganizationsService's genuine
+	// cross-org read (see application.RootMembershipRepository's own doc
+	// comment for the full RLS reasoning).
+	rootMembershipRepo := tenancypg.NewRootMembershipRepository(rootPool)
+	listMyOrganizationsService := tenancyapp.NewListMyOrganizationsService(rootMembershipRepo)
 	addMemberService := tenancyapp.NewAddMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
 	changeMemberRoleService := tenancyapp.NewChangeMemberRoleService(membershipRepo, roleBindingRepo, roleBindingRepo)
 	createProjectService := tenancyapp.NewCreateProjectService(projectRepo, membershipRepo, roleBindingRepo, orgRepo)
@@ -269,6 +275,7 @@ func main() {
 	passwordResetTokenRepo := identitypg.NewPasswordResetTokenRepository(pool)
 	apiKeyRepo := identitypg.NewAPIKeyRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
+	getOwnUserService := identityapp.NewGetOwnUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
 	refreshTokenService := identityapp.NewRefreshTokenService(refreshTokenRepo, userRepo)
 	passwordResetService := identityapp.NewPasswordResetService(passwordResetTokenRepo, userRepo, logger)
@@ -319,10 +326,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
 	mux.HandleFunc("POST /api/v1/users", identityhttp.CreateUserHandler(createUserService))
+	mux.HandleFunc("GET /api/v1/users/me", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.GetOwnUserHandler(getOwnUserService)))
 	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, loginLimiter, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/password-reset/request", identityhttp.RequestPasswordResetHandler(passwordResetService))
 	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", identityhttp.ConfirmPasswordResetHandler(passwordResetService))
+	mux.HandleFunc("GET /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListMyOrganizationsHandler(listMyOrganizationsService)))
 	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateOrganizationHandler(createOrgService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.GetOrganizationHandler(getOrgService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.AddMemberHandler(addMemberService)))
