@@ -11,7 +11,7 @@ import (
 )
 
 func TestCreateVariableHandler_NonMemberGetsScopeNotFound(t *testing.T) {
-	svc := application.NewCreateVariableService(newFakeVariableRepo(), newFakeMembershipChecker(), newFakeProjectChecker(), &fakeEnvironmentChecker{}, newFakeWorkspaceChecker(), newFakePermissionChecker(), &fakeOrganizationChecker{})
+	svc := application.NewCreateVariableService(newFakeVariableRepo(), newFakeMembershipChecker(), newFakeProjectChecker(), &fakeEnvironmentChecker{}, newFakeWorkspaceChecker(), newFakePermissionChecker(), &fakeOrganizationChecker{}, newFakeSecretMountChecker())
 	handler := withAuth(httpadapter.CreateVariableHandler(svc))
 
 	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/variables", "stranger", []byte(`{"scope_type":"organization","scope_id":"org-1","key":"FOO","category":"env_var","sensitivity":"plain","value":"bar"}`))
@@ -29,7 +29,7 @@ func TestCreateVariableHandler_Succeeds(t *testing.T) {
 	membership.add("org-1", "user-1")
 	permChecker := newFakePermissionChecker()
 	permChecker.grant("org-1", "user-1", "organization:manage")
-	svc := application.NewCreateVariableService(newFakeVariableRepo(), membership, newFakeProjectChecker(), &fakeEnvironmentChecker{}, newFakeWorkspaceChecker(), permChecker, &fakeOrganizationChecker{})
+	svc := application.NewCreateVariableService(newFakeVariableRepo(), membership, newFakeProjectChecker(), &fakeEnvironmentChecker{}, newFakeWorkspaceChecker(), permChecker, &fakeOrganizationChecker{}, newFakeSecretMountChecker())
 	handler := withAuth(httpadapter.CreateVariableHandler(svc))
 
 	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/variables", "user-1", []byte(`{"scope_type":"organization","scope_id":"org-1","key":"FOO","category":"env_var","sensitivity":"plain","value":"bar"}`))
@@ -54,7 +54,7 @@ func TestCreateVariableHandler_SensitiveValueIsMasked(t *testing.T) {
 	membership.add("org-1", "user-1")
 	permChecker := newFakePermissionChecker()
 	permChecker.grant("org-1", "user-1", "organization:manage")
-	svc := application.NewCreateVariableService(newFakeVariableRepo(), membership, newFakeProjectChecker(), &fakeEnvironmentChecker{}, newFakeWorkspaceChecker(), permChecker, &fakeOrganizationChecker{})
+	svc := application.NewCreateVariableService(newFakeVariableRepo(), membership, newFakeProjectChecker(), &fakeEnvironmentChecker{}, newFakeWorkspaceChecker(), permChecker, &fakeOrganizationChecker{}, newFakeSecretMountChecker())
 	handler := withAuth(httpadapter.CreateVariableHandler(svc))
 
 	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/variables", "user-1", []byte(`{"scope_type":"organization","scope_id":"org-1","key":"SECRET","category":"env_var","sensitivity":"sensitive","value":"topsecret"}`))
@@ -149,7 +149,7 @@ func TestResolveVariableHandler_NotFoundInCascade(t *testing.T) {
 	membership.add("org-1", "user-1")
 	workspaceChecker := newFakeWorkspaceChecker()
 	workspaceChecker.add("org-1", "ws-1")
-	svc := application.NewResolveVariableService(newFakeVariableRepo(), membership, workspaceChecker)
+	svc := application.NewResolveVariableService(newFakeVariableRepo(), membership, workspaceChecker, newFakeSecretResolver())
 	handler := withAuth(httpadapter.ResolveVariableHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/project-1/workspaces/ws-1/variables/resolve?key=NOPE", "user-1", nil)

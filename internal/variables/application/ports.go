@@ -60,3 +60,32 @@ type MembershipChecker interface {
 type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
+
+// SecretMountChecker - Variables never imports secrets/domain (this
+// codebase's no-cross-context-import rule), so CreateVariableService
+// verifies a secret_ref's mount_id resolves to a real
+// secrets/domain.SecretMount in this org through this port instead,
+// same shape as ProjectChecker/EnvironmentChecker/WorkspaceChecker
+// above.
+type SecretMountChecker interface {
+	SecretMountExists(ctx context.Context, organizationID, mountID string) (bool, error)
+}
+
+// SecretMountCheckerFunc lets main.go adapt a method value straight into
+// this port, matching this codebase's existing *CheckerFunc precedent
+// (e.g. tenancy's ScopeValidatorFunc) instead of a dedicated adapter
+// struct.
+type SecretMountCheckerFunc func(ctx context.Context, organizationID, mountID string) (bool, error)
+
+func (f SecretMountCheckerFunc) SecretMountExists(ctx context.Context, organizationID, mountID string) (bool, error) {
+	return f(ctx, organizationID, mountID)
+}
+
+// SecretResolver is wired in main.go to secrets/application's own
+// ResolveSecretService, whose ResolveValue method already matches this
+// exact signature with zero adapter glue code needed - the same
+// structural-satisfaction pattern this codebase already uses elsewhere
+// (e.g. RoleBindingRepository satisfying multiple ports at once).
+type SecretResolver interface {
+	ResolveValue(ctx context.Context, organizationID, mountID, path string) (string, error)
+}

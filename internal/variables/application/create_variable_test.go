@@ -13,7 +13,7 @@ const testOrgID = "org-1"
 const testProjectID = "project-1"
 const testWorkspaceID = "ws-1"
 
-func newCreateVariableService() (*application.CreateVariableService, *fakeVariableRepo, *fakeMembershipChecker, *fakeProjectChecker, *fakeEnvironmentChecker, *fakeWorkspaceChecker, *fakePermissionChecker, *fakeOrganizationChecker) {
+func newCreateVariableService() (*application.CreateVariableService, *fakeVariableRepo, *fakeMembershipChecker, *fakeProjectChecker, *fakeEnvironmentChecker, *fakeWorkspaceChecker, *fakePermissionChecker, *fakeOrganizationChecker, *fakeSecretMountChecker) {
 	repo := newFakeVariableRepo()
 	membership := newFakeMembershipChecker()
 	projectChecker := newFakeProjectChecker()
@@ -21,12 +21,13 @@ func newCreateVariableService() (*application.CreateVariableService, *fakeVariab
 	workspaceChecker := newFakeWorkspaceChecker()
 	permChecker := newFakePermissionChecker()
 	orgChecker := newFakeOrganizationChecker()
-	svc := application.NewCreateVariableService(repo, membership, projectChecker, envChecker, workspaceChecker, permChecker, orgChecker)
-	return svc, repo, membership, projectChecker, envChecker, workspaceChecker, permChecker, orgChecker
+	secretMountChecker := newFakeSecretMountChecker()
+	svc := application.NewCreateVariableService(repo, membership, projectChecker, envChecker, workspaceChecker, permChecker, orgChecker, secretMountChecker)
+	return svc, repo, membership, projectChecker, envChecker, workspaceChecker, permChecker, orgChecker, secretMountChecker
 }
 
 func TestCreateVariableService_NonMemberGetsScopeNotFoundBeforeAnyOtherCheck(t *testing.T) {
-	svc, _, _, _, _, _, _, _ := newCreateVariableService()
+	svc, _, _, _, _, _, _, _, _ := newCreateVariableService()
 
 	// Deliberately no membership, no scope registered, no permission
 	// granted - a non-member must get ErrScopeNotFound, not whatever
@@ -41,7 +42,7 @@ func TestCreateVariableService_NonMemberGetsScopeNotFoundBeforeAnyOtherCheck(t *
 }
 
 func TestCreateVariableService_UnknownProjectScopeRejected(t *testing.T) {
-	svc, _, membership, _, _, _, _, _ := newCreateVariableService()
+	svc, _, membership, _, _, _, _, _, _ := newCreateVariableService()
 	membership.add(testOrgID, "member-1")
 
 	_, err := svc.Execute(context.Background(), application.CreateVariableInput{
@@ -54,7 +55,7 @@ func TestCreateVariableService_UnknownProjectScopeRejected(t *testing.T) {
 }
 
 func TestCreateVariableService_WorkspaceScopeRequiresWorkspaceManageNotOrganizationManage(t *testing.T) {
-	svc, _, membership, _, _, workspaceChecker, permChecker, _ := newCreateVariableService()
+	svc, _, membership, _, _, workspaceChecker, permChecker, _, _ := newCreateVariableService()
 	membership.add(testOrgID, "member-1")
 	workspaceChecker.add(testOrgID, testWorkspaceID, testProjectID, nil)
 	// Grant only organization:manage, not workspace:manage - the
@@ -72,7 +73,7 @@ func TestCreateVariableService_WorkspaceScopeRequiresWorkspaceManageNotOrganizat
 }
 
 func TestCreateVariableService_ArchivedOrgRejected(t *testing.T) {
-	svc, _, membership, _, _, _, permChecker, orgChecker := newCreateVariableService()
+	svc, _, membership, _, _, _, permChecker, orgChecker, _ := newCreateVariableService()
 	membership.add(testOrgID, "member-1")
 	permChecker.grant(testOrgID, "member-1", "organization:manage")
 	orgChecker.archive(testOrgID)
@@ -87,7 +88,7 @@ func TestCreateVariableService_ArchivedOrgRejected(t *testing.T) {
 }
 
 func TestCreateVariableService_Succeeds(t *testing.T) {
-	svc, repo, membership, _, _, _, permChecker, _ := newCreateVariableService()
+	svc, repo, membership, _, _, _, permChecker, _, _ := newCreateVariableService()
 	membership.add(testOrgID, "member-1")
 	permChecker.grant(testOrgID, "member-1", "organization:manage")
 

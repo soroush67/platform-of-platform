@@ -4,7 +4,6 @@ package domain
 
 import (
 	"errors"
-	"fmt"
 	"regexp"
 	"time"
 
@@ -90,9 +89,27 @@ func (s Sensitivity) Valid() bool {
 
 var keyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// SecretReference is the value object from docs/architecture/11-module-
+// secrets-state.md §2 - "no independent CRUD by design," it only ever
+// appears embedded inside a Variable. MountID points at a real
+// secrets/domain.SecretMount in this same Organization (validated by
+// CreateVariableService's own SecretMountChecker port, not by this
+// package - Variables never imports secrets/domain, per this
+// codebase's no-cross-context-import rule). Path is the backend's own
+// full path (e.g. Vault's "secret/data/database/prod/password") -
+// this codebase doesn't standardize or rewrite it.
+type SecretReference struct {
+	MountID string
+	Path    string
+}
+
 // Variable is the aggregate root (docs/architecture/03-domain-model.md
-// §7). Value is always plain text in this codebase - see the migration's
-// own comment on why secret_ref isn't supported yet (no Secrets context).
+// §7). Value XOR SecretRef - exactly one is ever set, matching
+// migrations/0018_secrets.up.sql's own CHECK constraint at the storage
+// layer. A Variable backed by SecretRef never has its real value
+// written anywhere in this codebase's own database - Value stays empty
+// for it always; ResolveVariableService is what fetches the real
+// content live, at resolve time, from the real backend.
 type Variable struct {
 	ID             string
 	OrganizationID string
@@ -102,24 +119,36 @@ type Variable struct {
 	Category       Category
 	Sensitivity    Sensitivity
 	Value          string
+	SecretRef      *SecretReference
 	CreatedAt      time.Time
 }
 
-func NewVariable(organizationID string, scopeType ScopeType, scopeID, key string, category Category, sensitivity Sensitivity, value string) (*Variable, error) {
+// validateVariableFields is shared by NewVariable and
+// NewVariableWithSecretRef - every field these two constructors have in
+// common (everything except Value/SecretRef themselves, which are each
+// constructor's own concern).
+func validateVariableFields(organizationID string, scopeType ScopeType, scopeID, key string, category Category, sensitivity Sensitivity) error {
 	if organizationID == "" || scopeID == "" {
-		return nil, &ValidationError{Message: "organization_id and scope_id are required"}
+		return &ValidationError{Message: "organization_id and scope_id are required"}
 	}
 	if !scopeType.Valid() {
-		return nil, &ValidationError{Message: fmt.Sprintf("scope_type %q must be one of organization, project, environment, workspace", scopeType)}
+		return &ValidationError{Message: "invalid scope_type: " + string(scopeType)}
 	}
 	if !keyPattern.MatchString(key) {
-		return nil, &ValidationError{Message: fmt.Sprintf("key %q must start with a letter/underscore and contain only letters, digits, or underscores", key)}
+		return &ValidationError{Message: "key must match " + keyPattern.String()}
 	}
 	if !category.Valid() {
-		return nil, &ValidationError{Message: fmt.Sprintf("category %q must be one of env_var, engine_var, file_template", category)}
+		return &ValidationError{Message: "invalid category: " + string(category)}
 	}
 	if !sensitivity.Valid() {
-		return nil, &ValidationError{Message: fmt.Sprintf("sensitivity %q must be one of plain, sensitive", sensitivity)}
+		return &ValidationError{Message: "invalid sensitivity: " + string(sensitivity)}
+	}
+	return nil
+}
+
+func NewVariable(organizationID string, scopeType ScopeType, scopeID, key string, category Category, sensitivity Sensitivity, value string) (*Variable, error) {
+	if err := validateVariableFields(organizationID, scopeType, scopeID, key, category, sensitivity); err != nil {
+		return nil, err
 	}
 
 	return &Variable{
@@ -131,6 +160,35 @@ func NewVariable(organizationID string, scopeType ScopeType, scopeID, key string
 		Category:       category,
 		Sensitivity:    sensitivity,
 		Value:          value,
+		CreatedAt:      time.Now().UTC(),
+	}, nil
+}
+
+// NewVariableWithSecretRef is NewVariable's counterpart for the
+// SecretRef-backed path (docs/architecture/11-module-secrets-state.md
+// §2) - mountID/path aren't validated for real existence here (Variables
+// never imports secrets/domain to check a SecretMount actually exists;
+// CreateVariableService's own SecretMountChecker port does that, same
+// no-cross-context-import boundary SecretReference's own doc comment
+// above already explains). This constructor only enforces that both are
+// non-empty and leaves Value at its zero value permanently.
+func NewVariableWithSecretRef(organizationID string, scopeType ScopeType, scopeID, key string, category Category, sensitivity Sensitivity, mountID, path string) (*Variable, error) {
+	if err := validateVariableFields(organizationID, scopeType, scopeID, key, category, sensitivity); err != nil {
+		return nil, err
+	}
+	if mountID == "" || path == "" {
+		return nil, &ValidationError{Message: "secret_mount_id and secret_path are required"}
+	}
+
+	return &Variable{
+		ID:             uuid.NewString(),
+		OrganizationID: organizationID,
+		ScopeType:      scopeType,
+		ScopeID:        scopeID,
+		Key:            key,
+		Category:       category,
+		Sensitivity:    sensitivity,
+		SecretRef:      &SecretReference{MountID: mountID, Path: path},
 		CreatedAt:      time.Now().UTC(),
 	}, nil
 }

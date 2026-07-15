@@ -57,7 +57,14 @@ func (s *UpdateVariableService) Execute(ctx context.Context, in UpdateVariableIn
 		return nil, &domain.ValidationError{Message: "sensitivity must be one of plain, sensitive"}
 	}
 
+	// UpdateVariableInput only ever carries a literal Value - there's no
+	// secret_ref field to update here (docs/architecture/11-module-
+	// secrets-state.md §2's own "no independent CRUD by design" - a
+	// SecretRef-backed Variable can only be re-pointed by deleting and
+	// recreating it). Clearing SecretRef keeps Value XOR SecretRef true
+	// even when this call turns a secret-ref Variable into a plain one.
 	v.Value = in.Value
+	v.SecretRef = nil
 	v.Category = in.Category
 	v.Sensitivity = in.Sensitivity
 

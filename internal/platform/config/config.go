@@ -5,6 +5,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"time"
@@ -82,6 +83,17 @@ type Config struct {
 	// enforce is meant to prevent, same "fail closed" posture already
 	// applied to the TLS cert trio below.
 	RedisAddr string
+	// SecretsMasterKey is the envelope-encryption master key
+	// (internal/platform/envelope.KeySize, 32 raw bytes, hex-encoded in
+	// the env var) every SecretMount's own AppRole secret_id is sealed
+	// under before it ever reaches Postgres (docs/architecture/11-
+	// module-secrets-state.md §1). Required, no generated-at-boot
+	// fallback - a random-per-boot key would make every previously
+	// sealed secret_id permanently undecryptable the moment the process
+	// restarts, silently bricking every existing SecretMount; failing
+	// closed here is the same posture as the TLS cert trio and RedisAddr
+	// above.
+	SecretsMasterKey []byte
 }
 
 func Load() (Config, error) {
@@ -125,6 +137,19 @@ func Load() (Config, error) {
 		IdempotencyReaperInterval: idempotencyReaperInterval,
 		RedisAddr:                 os.Getenv("REDIS_ADDR"),
 	}
+
+	secretsMasterKeyHex := os.Getenv("SECRETS_MASTER_KEY")
+	if secretsMasterKeyHex == "" {
+		return Config{}, fmt.Errorf("config: SECRETS_MASTER_KEY is required - SecretMount credentials have no plaintext fallback")
+	}
+	secretsMasterKey, err := hex.DecodeString(secretsMasterKeyHex)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: SECRETS_MASTER_KEY must be hex-encoded: %w", err)
+	}
+	if len(secretsMasterKey) != 32 {
+		return Config{}, fmt.Errorf("config: SECRETS_MASTER_KEY must decode to exactly 32 bytes, got %d", len(secretsMasterKey))
+	}
+	cfg.SecretsMasterKey = secretsMasterKey
 
 	if cfg.DatabaseURL == "" {
 		return Config{}, fmt.Errorf("config: DATABASE_URL is required")

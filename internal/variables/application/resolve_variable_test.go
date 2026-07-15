@@ -11,14 +11,21 @@ import (
 
 func setupResolveService(t *testing.T) (*application.ResolveVariableService, *fakeVariableRepo, *fakeMembershipChecker, *fakeWorkspaceChecker) {
 	t.Helper()
+	svc, repo, membership, workspaceChecker, _ := setupResolveServiceWithSecretResolver(t)
+	return svc, repo, membership, workspaceChecker
+}
+
+func setupResolveServiceWithSecretResolver(t *testing.T) (*application.ResolveVariableService, *fakeVariableRepo, *fakeMembershipChecker, *fakeWorkspaceChecker, *fakeSecretResolver) {
+	t.Helper()
 	repo := newFakeVariableRepo()
 	membership := newFakeMembershipChecker()
 	membership.add(testOrgID, "member-1")
 	workspaceChecker := newFakeWorkspaceChecker()
 	environmentID := "env-1"
 	workspaceChecker.add(testOrgID, testWorkspaceID, testProjectID, &environmentID)
-	svc := application.NewResolveVariableService(repo, membership, workspaceChecker)
-	return svc, repo, membership, workspaceChecker
+	secretResolver := newFakeSecretResolver()
+	svc := application.NewResolveVariableService(repo, membership, workspaceChecker, secretResolver)
+	return svc, repo, membership, workspaceChecker, secretResolver
 }
 
 func TestResolveVariableService_UnknownWorkspaceGetsScopeNotFound(t *testing.T) {
@@ -65,6 +72,24 @@ func TestResolveVariableService_NoMatchAnywhereReturnsVariableNotFound(t *testin
 	_, err := svc.Execute(context.Background(), testOrgID, testWorkspaceID, "NOPE", "member-1")
 	if !errors.Is(err, domain.ErrVariableNotFound) {
 		t.Fatalf("expected ErrVariableNotFound, got: %v", err)
+	}
+}
+
+func TestResolveVariableService_SecretRefBackedVariableResolvesLiveValue(t *testing.T) {
+	svc, repo, _, _, secretResolver := setupResolveServiceWithSecretResolver(t)
+	v, err := domain.NewVariableWithSecretRef(testOrgID, domain.ScopeTypeWorkspace, testWorkspaceID, "FOO", domain.CategoryEnvVar, domain.SensitivitySensitive, "mount-1", "secret/data/foo")
+	if err != nil {
+		t.Fatalf("NewVariableWithSecretRef: %v", err)
+	}
+	repo.put(v)
+	secretResolver.set(testOrgID, "mount-1", "secret/data/foo", "live-value-from-vault")
+
+	got, err := svc.Execute(context.Background(), testOrgID, testWorkspaceID, "FOO", "member-1")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got.Value != "live-value-from-vault" {
+		t.Errorf("expected the SecretRef to be resolved to the live backend value, got %q", got.Value)
 	}
 }
 

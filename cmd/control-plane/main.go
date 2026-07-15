@@ -51,6 +51,11 @@ import (
 	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	rbacapp "platform-of-platform/internal/rbac/application"
 	rbacdomain "platform-of-platform/internal/rbac/domain"
+	secretshttp "platform-of-platform/internal/secrets/adapters/http"
+	secretspg "platform-of-platform/internal/secrets/adapters/postgres"
+	secretsvault "platform-of-platform/internal/secrets/adapters/vault"
+	secretsapp "platform-of-platform/internal/secrets/application"
+	secretsdomain "platform-of-platform/internal/secrets/domain"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
 	tenancyapp "platform-of-platform/internal/tenancy/application"
@@ -198,10 +203,41 @@ func main() {
 	staleRunReaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, workerRegistry, cfg.RunStaleAfter, cfg.RunReaperInterval, logger)
 	purgeReaper := tenancyapp.NewPurgeReaperService(orgRepo, cfg.OrgPurgeAfter, cfg.OrgPurgeReaperInterval, logger)
 
+	// Secrets/Vault integration (docs/architecture/11-module-secrets-
+	// state.md §1) - secretMountRepo/vaultClient are shared by all four
+	// Secrets services below; resolveSecretService is also handed
+	// straight to Variables as its SecretResolver port (its ResolveValue
+	// method already matches that port's signature with zero adapter
+	// glue, same "one concrete type satisfies several ports" pattern as
+	// roleBindingRepo/workspaceRepo above).
+	secretMountRepo := secretspg.NewSecretMountRepository(pool)
+	vaultClient := secretsvault.NewClient()
+	createSecretMountService := secretsapp.NewCreateSecretMountService(secretMountRepo, membershipRepo, roleBindingRepo, cfg.SecretsMasterKey)
+	listSecretMountsService := secretsapp.NewListSecretMountsService(secretMountRepo, membershipRepo)
+	testConnectionService := secretsapp.NewTestConnectionService(secretMountRepo, membershipRepo, roleBindingRepo, vaultClient, cfg.SecretsMasterKey)
+	resolveSecretService := secretsapp.NewResolveSecretService(secretMountRepo, vaultClient, cfg.SecretsMasterKey)
+
+	// secretMountCheckerFunc bridges Variables' own SecretMountChecker
+	// port to Secrets' repository - Variables never imports secrets/
+	// domain directly (docs/architecture/18-backend-structure.md §3's
+	// dependency-inversion rule), so this closure (only main.go is
+	// allowed to see both contexts) is what translates
+	// secretsdomain.ErrSecretMountNotFound into the plain (false, nil)
+	// SecretMountChecker's own contract expects.
+	secretMountCheckerFunc := variablesapp.SecretMountCheckerFunc(func(ctx context.Context, organizationID, mountID string) (bool, error) {
+		if _, err := secretMountRepo.GetByID(ctx, organizationID, mountID); err != nil {
+			if errors.Is(err, secretsdomain.ErrSecretMountNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	})
+
 	variableRepo := variablespg.NewVariableRepository(pool)
-	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo, orgRepo)
+	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo, orgRepo, secretMountCheckerFunc)
 	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
-	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo)
+	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo, resolveSecretService)
 	updateVariableService := variablesapp.NewUpdateVariableService(variableRepo, membershipRepo, roleBindingRepo)
 	deleteVariableService := variablesapp.NewDeleteVariableService(variableRepo, membershipRepo, roleBindingRepo)
 
@@ -319,6 +355,9 @@ func main() {
 	mux.HandleFunc("PUT /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.UpdateVariableHandler(updateVariableService)))
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.DeleteVariableHandler(deleteVariableService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/variables/resolve", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.ResolveVariableHandler(resolveVariableService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/secret-mounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.CreateSecretMountHandler(createSecretMountService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/secret-mounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.ListSecretMountsHandler(listSecretMountsService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/secret-mounts/{mount}/test-connection", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.TestConnectionHandler(testConnectionService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/audit-log", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, audithttp.ListAuditLogHandler(listAuditEntriesService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/service-accounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateServiceAccountHandler(createServiceAccountService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/service-accounts/{sa}/api-keys", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateAPIKeyHandler(createAPIKeyService)))

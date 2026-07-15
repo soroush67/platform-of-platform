@@ -112,6 +112,59 @@ services:
   redis:
     image: redis:7-alpine
 
+  # Real secrets backend (docs/architecture/11-module-secrets-state.md
+  # §1) - dev mode (auto-unsealed, in-memory storage, root token fixed
+  # via env for this compose stack's own reproducibility) rather than a
+  # mock; a production deployment would point secret_mounts at a real
+  # persistent Vault cluster instead of this one, but the AppRole login
+  # + KV v2 read path this codebase actually implements
+  # (internal/secrets/adapters/vault) is exercised for real against this
+  # server, not stubbed.
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "dev-only-root-token-not-for-production"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    ports:
+      - "8200:8200"
+
+  # One-shot: dev-mode Vault auto-mounts a KV v2 engine at "secret/" but
+  # doesn't configure AppRole auth on its own - this creates the
+  # policy/role a SecretMount actually authenticates as, then logs the
+  # real role_id/secret_id pair (`docker logs platform-of-platform-vault-init-1`)
+  # for whoever is creating a SecretMount via the API to use. Idempotent
+  # the same way cockroach-init/mtls-init are: `|| true` on the two
+  # enable calls (already-enabled is a real error from Vault, not
+  # something to fail this service over on a restarted stack), and
+  # `vault write auth/approle/role/...` itself is already a plain
+  # upsert.
+  vault-init:
+    image: hashicorp/vault:1.17
+    entrypoint: ["sh", "-c"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+      VAULT_TOKEN: "dev-only-root-token-not-for-production"
+    command:
+      - |
+        set -e
+        until vault status >/dev/null 2>&1; do sleep 1; done
+        vault auth enable approle || true
+        vault policy write platform-of-platform-policy - <<'EOF'
+        path "secret/data/*" {
+          capabilities = ["read"]
+        }
+        EOF
+        vault write auth/approle/role/platform-of-platform \
+          token_policies="platform-of-platform-policy" \
+          token_ttl=1h token_max_ttl=4h secret_id_ttl=0 secret_id_num_uses=0
+        echo "ROLE_ID=$(vault read -field=role_id auth/approle/role/platform-of-platform/role-id)"
+        echo "SECRET_ID=$(vault write -f -field=secret_id auth/approle/role/platform-of-platform/secret-id)"
+    depends_on:
+      vault:
+        condition: service_started
+    restart: "no"
+
   control-plane:
     build:
       context: .
@@ -125,6 +178,8 @@ services:
         condition: service_started
       redis:
         condition: service_started
+      vault-init:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgresql://root@cockroach-0:26257/platform?sslmode=disable
       APP_DATABASE_URL: postgresql://platform_app@cockroach-0:26257/platform?sslmode=disable
@@ -140,6 +195,16 @@ services:
       # own MASTER_KEY framing) - a real deployment sources this from a
       # real secret store, not a compose file default.
       JWT_SIGNING_KEY: "dev-only-signing-key-not-for-production"
+      # 32 bytes, hex-encoded (internal/platform/envelope.KeySize) - the
+      # envelope-encryption master key every SecretMount's own AppRole
+      # secret_id is sealed under before it ever reaches Postgres. Same
+      # "dev compose default, real deployment sources it from a real
+      # secret store" posture as JWT_SIGNING_KEY above - genuinely not
+      # the Vault instance's own root token, a separate key for a
+      # separate purpose (this seals the credential Variables/Secrets
+      # use to *authenticate to* Vault, it isn't a Vault credential
+      # itself).
+      SECRETS_MASTER_KEY: "3d418e2e891b5035a949b726cdb03ef6548dab2281d321e54df83de3f0158dfd"
     volumes:
       - mtls-certs:/certs:ro
     ports:

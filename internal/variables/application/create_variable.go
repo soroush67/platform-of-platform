@@ -26,6 +26,12 @@ type CreateVariableInput struct {
 	Category         domain.Category
 	Sensitivity      domain.Sensitivity
 	Value            string
+	// SecretMountID/SecretPath are mutually exclusive with Value - set
+	// SecretMountID to create a SecretRef-backed Variable instead
+	// (docs/architecture/11-module-secrets-state.md §2). Leave both
+	// empty for the ordinary literal-Value path.
+	SecretMountID string
+	SecretPath    string
 }
 
 type CreateVariableService struct {
@@ -36,12 +42,13 @@ type CreateVariableService struct {
 	workspaceChecker   WorkspaceChecker
 	permChecker        PermissionChecker
 	orgChecker         OrganizationChecker
+	secretMountChecker SecretMountChecker
 }
 
-func NewCreateVariableService(repo VariableRepository, membership MembershipChecker, projectChecker ProjectChecker, environmentChecker EnvironmentChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker, orgChecker OrganizationChecker) *CreateVariableService {
+func NewCreateVariableService(repo VariableRepository, membership MembershipChecker, projectChecker ProjectChecker, environmentChecker EnvironmentChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker, orgChecker OrganizationChecker, secretMountChecker SecretMountChecker) *CreateVariableService {
 	return &CreateVariableService{
 		repo: repo, membership: membership, projectChecker: projectChecker, environmentChecker: environmentChecker,
-		workspaceChecker: workspaceChecker, permChecker: permChecker, orgChecker: orgChecker,
+		workspaceChecker: workspaceChecker, permChecker: permChecker, orgChecker: orgChecker, secretMountChecker: secretMountChecker,
 	}
 }
 
@@ -51,7 +58,18 @@ func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableIn
 	// ordering fix now applied to every Create*Service in this
 	// codebase), then verify the scope_id actually resolves to something
 	// real, then check permission.
-	v, err := domain.NewVariable(in.OrganizationID, in.ScopeType, in.ScopeID, in.Key, in.Category, in.Sensitivity, in.Value)
+	usesSecretRef := in.SecretMountID != "" || in.SecretPath != ""
+	if usesSecretRef && in.Value != "" {
+		return nil, &domain.ValidationError{Message: "value and secret_mount_id/secret_path are mutually exclusive"}
+	}
+
+	var v *domain.Variable
+	var err error
+	if usesSecretRef {
+		v, err = domain.NewVariableWithSecretRef(in.OrganizationID, in.ScopeType, in.ScopeID, in.Key, in.Category, in.Sensitivity, in.SecretMountID, in.SecretPath)
+	} else {
+		v, err = domain.NewVariable(in.OrganizationID, in.ScopeType, in.ScopeID, in.Key, in.Category, in.Sensitivity, in.Value)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +107,16 @@ func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableIn
 	}
 	if archived {
 		return nil, domain.ErrOrganizationArchived
+	}
+
+	if usesSecretRef {
+		mountExists, err := s.secretMountChecker.SecretMountExists(ctx, in.OrganizationID, in.SecretMountID)
+		if err != nil {
+			return nil, err
+		}
+		if !mountExists {
+			return nil, &domain.ValidationError{Message: "secret_mount_id does not resolve to a real secret mount in this organization"}
+		}
 	}
 
 	if err := s.repo.Create(ctx, v); err != nil {

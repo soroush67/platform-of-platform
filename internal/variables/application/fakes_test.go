@@ -234,3 +234,49 @@ func (f *fakeOrganizationChecker) archive(orgID string) {
 	defer f.mu.Unlock()
 	f.archived[orgID] = true
 }
+
+type fakeSecretMountChecker struct {
+	mu     sync.Mutex
+	mounts map[string]bool
+}
+
+func newFakeSecretMountChecker() *fakeSecretMountChecker {
+	return &fakeSecretMountChecker{mounts: map[string]bool{}}
+}
+
+func (f *fakeSecretMountChecker) SecretMountExists(ctx context.Context, organizationID, mountID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mounts[organizationID+"|"+mountID], nil
+}
+
+func (f *fakeSecretMountChecker) add(orgID, mountID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mounts[orgID+"|"+mountID] = true
+}
+
+type fakeSecretResolver struct {
+	mu     sync.Mutex
+	values map[string]string
+	err    error
+}
+
+func newFakeSecretResolver() *fakeSecretResolver {
+	return &fakeSecretResolver{values: map[string]string{}}
+}
+
+func (f *fakeSecretResolver) ResolveValue(ctx context.Context, organizationID, mountID, path string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.values[organizationID+"|"+mountID+"|"+path], nil
+}
+
+func (f *fakeSecretResolver) set(orgID, mountID, path, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.values[orgID+"|"+mountID+"|"+path] = value
+}

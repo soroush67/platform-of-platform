@@ -18,10 +18,11 @@ type ResolveVariableService struct {
 	repo             VariableRepository
 	membership       MembershipChecker
 	workspaceChecker WorkspaceChecker
+	secretResolver   SecretResolver
 }
 
-func NewResolveVariableService(repo VariableRepository, membership MembershipChecker, workspaceChecker WorkspaceChecker) *ResolveVariableService {
-	return &ResolveVariableService{repo: repo, membership: membership, workspaceChecker: workspaceChecker}
+func NewResolveVariableService(repo VariableRepository, membership MembershipChecker, workspaceChecker WorkspaceChecker, secretResolver SecretResolver) *ResolveVariableService {
+	return &ResolveVariableService{repo: repo, membership: membership, workspaceChecker: workspaceChecker, secretResolver: secretResolver}
 }
 
 func (s *ResolveVariableService) Execute(ctx context.Context, organizationID, workspaceID, key, requestingUserID string) (*domain.Variable, error) {
@@ -97,5 +98,21 @@ func (s *ResolveVariableService) tryScope(ctx context.Context, organizationID st
 		}
 		return nil, err
 	}
+
+	// A SecretRef-backed Variable never has its real value in Postgres
+	// (docs/architecture/11-module-secrets-state.md §2) - fetch it live,
+	// on every resolution, from the real backend through the
+	// SecretResolver port. No membership/permission re-check here:
+	// Execute has already gated on scope membership above this call, and
+	// ResolveSecretService's own doc comment on why it doesn't re-check
+	// applies just as much on this side of the port.
+	if v.SecretRef != nil {
+		value, err := s.secretResolver.ResolveValue(ctx, organizationID, v.SecretRef.MountID, v.SecretRef.Path)
+		if err != nil {
+			return nil, err
+		}
+		v.Value = value
+	}
+
 	return v, nil
 }

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,16 +29,29 @@ func (r *VariableRepository) Create(ctx context.Context, v *domain.Variable) err
 		return err
 	}
 
+	value, mountID, path := valueOrSecretRefColumns(v)
+
 	_, err = tx.Exec(ctx,
-		`INSERT INTO variables (id, organization_id, scope_type, scope_id, key, category, sensitivity, value, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		v.ID, v.OrganizationID, string(v.ScopeType), v.ScopeID, v.Key, string(v.Category), string(v.Sensitivity), v.Value, v.CreatedAt,
+		`INSERT INTO variables (id, organization_id, scope_type, scope_id, key, category, sensitivity, value, secret_mount_id, secret_path, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		v.ID, v.OrganizationID, string(v.ScopeType), v.ScopeID, v.Key, string(v.Category), string(v.Sensitivity), value, mountID, path, v.CreatedAt,
 	)
 	if err != nil {
 		return err
 	}
 
 	return tx.Commit(ctx)
+}
+
+// valueOrSecretRefColumns implements Value XOR SecretRef
+// (migrations/0018_secrets.up.sql's own CHECK constraint) at the Go
+// side of the insert - exactly one of (value) or (secret_mount_id,
+// secret_path) is ever non-NULL.
+func valueOrSecretRefColumns(v *domain.Variable) (value, mountID, path sql.NullString) {
+	if v.SecretRef != nil {
+		return sql.NullString{}, sql.NullString{String: v.SecretRef.MountID, Valid: true}, sql.NullString{String: v.SecretRef.Path, Valid: true}
+	}
+	return sql.NullString{String: v.Value, Valid: true}, sql.NullString{}, sql.NullString{}
 }
 
 func (r *VariableRepository) GetByScope(ctx context.Context, organizationID string, scopeType domain.ScopeType, scopeID, key string) (*domain.Variable, error) {
@@ -52,7 +66,7 @@ func (r *VariableRepository) GetByScope(ctx context.Context, organizationID stri
 	}
 
 	v, err := scanVariable(tx.QueryRow(ctx,
-		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, created_at
+		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, secret_mount_id, secret_path, created_at
 		 FROM variables WHERE organization_id = $1 AND scope_type = $2 AND scope_id = $3 AND key = $4`,
 		organizationID, string(scopeType), scopeID, key,
 	))
@@ -78,7 +92,7 @@ func (r *VariableRepository) ListByScope(ctx context.Context, organizationID str
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, created_at
+		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, secret_mount_id, secret_path, created_at
 		 FROM variables WHERE organization_id = $1 AND scope_type = $2 AND scope_id = $3 ORDER BY key`,
 		organizationID, string(scopeType), scopeID,
 	)
@@ -119,7 +133,7 @@ func (r *VariableRepository) GetByID(ctx context.Context, organizationID, variab
 	}
 
 	v, err := scanVariable(tx.QueryRow(ctx,
-		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, created_at
+		`SELECT id, organization_id, scope_type, scope_id, key, category, sensitivity, value, secret_mount_id, secret_path, created_at
 		 FROM variables WHERE organization_id = $1 AND id = $2`,
 		organizationID, variableID,
 	))
@@ -149,8 +163,12 @@ func (r *VariableRepository) Update(ctx context.Context, v *domain.Variable) err
 		return err
 	}
 
+	// Always writes a literal value and clears any secret_ref -
+	// UpdateVariableInput has no secret_ref field of its own (see the
+	// application layer's own comment on why), so an Update always
+	// leaves the row in the plain-Value branch of the XOR.
 	_, err = tx.Exec(ctx,
-		`UPDATE variables SET value = $3, category = $4, sensitivity = $5 WHERE organization_id = $1 AND id = $2`,
+		`UPDATE variables SET value = $3, secret_mount_id = NULL, secret_path = NULL, category = $4, sensitivity = $5 WHERE organization_id = $1 AND id = $2`,
 		v.OrganizationID, v.ID, v.Value, string(v.Category), string(v.Sensitivity),
 	)
 	if err != nil {
@@ -185,9 +203,15 @@ type rowScanner interface {
 
 func scanVariable(row rowScanner) (*domain.Variable, error) {
 	var v domain.Variable
-	err := row.Scan(&v.ID, &v.OrganizationID, &v.ScopeType, &v.ScopeID, &v.Key, &v.Category, &v.Sensitivity, &v.Value, &v.CreatedAt)
+	var value, mountID, path sql.NullString
+	err := row.Scan(&v.ID, &v.OrganizationID, &v.ScopeType, &v.ScopeID, &v.Key, &v.Category, &v.Sensitivity, &value, &mountID, &path, &v.CreatedAt)
 	if err != nil {
 		return nil, err
+	}
+	if mountID.Valid {
+		v.SecretRef = &domain.SecretReference{MountID: mountID.String, Path: path.String}
+	} else {
+		v.Value = value.String
 	}
 	return &v, nil
 }

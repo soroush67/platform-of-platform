@@ -18,6 +18,19 @@ type createVariableRequest struct {
 	Category    string `json:"category"`
 	Sensitivity string `json:"sensitivity"`
 	Value       string `json:"value"`
+	// SecretRef is mutually exclusive with Value - see
+	// application.CreateVariableInput's own comment.
+	SecretRef *secretRefRequest `json:"secret_ref"`
+}
+
+type secretRefRequest struct {
+	MountID string `json:"mount_id"`
+	Path    string `json:"path"`
+}
+
+type secretRefResponse struct {
+	MountID string `json:"mount_id"`
+	Path    string `json:"path"`
 }
 
 type variableResponse struct {
@@ -32,9 +45,13 @@ type variableResponse struct {
 	// null instead of an empty string - distinguishable from "the value
 	// genuinely is empty," which a plain "" would hide. Same masking
 	// posture this operator's own compose-platform already established
-	// this session for sensitive values.
-	Value     *string `json:"value"`
-	CreatedAt string  `json:"created_at"`
+	// this session for sensitive values. Always null for a SecretRef-
+	// backed Variable outside of a real resolve call (Create/List never
+	// touch the real backend), and masked the same as any other
+	// sensitive Value when it *is* populated by ResolveVariableHandler.
+	Value     *string            `json:"value"`
+	SecretRef *secretRefResponse `json:"secret_ref"`
+	CreatedAt string             `json:"created_at"`
 }
 
 func toVariableResponse(v *domain.Variable) variableResponse {
@@ -48,7 +65,15 @@ func toVariableResponse(v *domain.Variable) variableResponse {
 		Sensitivity:    string(v.Sensitivity),
 		CreatedAt:      v.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
-	if v.Sensitivity != domain.SensitivitySensitive {
+	if v.SecretRef != nil {
+		resp.SecretRef = &secretRefResponse{MountID: v.SecretRef.MountID, Path: v.SecretRef.Path}
+	}
+	// A SecretRef-backed Variable's Value is only ever non-empty right
+	// after ResolveVariableHandler's own live fetch - Create/List/GetByID
+	// never touch the real backend, so v.Value is always "" for them,
+	// and this stays null rather than surfacing a misleading empty
+	// string.
+	if v.Sensitivity != domain.SensitivitySensitive && (v.SecretRef == nil || v.Value != "") {
 		value := v.Value
 		resp.Value = &value
 	}
@@ -159,7 +184,7 @@ func CreateVariableHandler(svc *application.CreateVariableService) http.HandlerF
 			return
 		}
 
-		v, err := svc.Execute(r.Context(), application.CreateVariableInput{
+		in := application.CreateVariableInput{
 			OrganizationID:   r.PathValue("id"),
 			RequestingUserID: userID,
 			ScopeType:        domain.ScopeType(req.ScopeType),
@@ -168,7 +193,13 @@ func CreateVariableHandler(svc *application.CreateVariableService) http.HandlerF
 			Category:         domain.Category(req.Category),
 			Sensitivity:      domain.Sensitivity(req.Sensitivity),
 			Value:            req.Value,
-		})
+		}
+		if req.SecretRef != nil {
+			in.SecretMountID = req.SecretRef.MountID
+			in.SecretPath = req.SecretRef.Path
+		}
+
+		v, err := svc.Execute(r.Context(), in)
 		if err != nil {
 			writeVariablesError(w, err, "variable not found")
 			return
