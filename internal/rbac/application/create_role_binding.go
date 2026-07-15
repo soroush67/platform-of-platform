@@ -8,7 +8,11 @@ import (
 
 // CreateRoleBindingInput implements `POST /orgs/{org}/role-bindings`
 // (docs/architecture/13-module-identity-rbac-tenancy.md §3): { role_id,
-// subject: {type, id}, scope: {type, id} }.
+// subject: {type, id}, scope: {type, id}, effect }. Effect defaults to
+// "allow" when omitted - every binding created before EffectDeny
+// existed was implicitly an allow, and every existing caller of this
+// endpoint that doesn't yet know about "effect" should keep getting
+// exactly that behavior.
 type CreateRoleBindingInput struct {
 	OrganizationID   string
 	RequestingUserID string
@@ -17,22 +21,25 @@ type CreateRoleBindingInput struct {
 	SubjectID        string
 	ScopeType        string
 	ScopeID          string
+	Effect           string
 }
 
 type CreateRoleBindingService struct {
-	roleRepo         RoleRepository
-	bindingRepo      RoleBindingRepository
-	membership       MembershipChecker
-	permChecker      PermissionChecker
-	projectChecker   ProjectChecker
-	workspaceChecker WorkspaceChecker
-	teamChecker      TeamChecker
+	roleRepo            RoleRepository
+	bindingRepo         RoleBindingRepository
+	membership          MembershipChecker
+	permChecker         PermissionChecker
+	projectChecker      ProjectChecker
+	workspaceChecker    WorkspaceChecker
+	teamChecker         TeamChecker
+	serviceAccountCheck ServiceAccountChecker
 }
 
-func NewCreateRoleBindingService(roleRepo RoleRepository, bindingRepo RoleBindingRepository, membership MembershipChecker, permChecker PermissionChecker, projectChecker ProjectChecker, workspaceChecker WorkspaceChecker, teamChecker TeamChecker) *CreateRoleBindingService {
+func NewCreateRoleBindingService(roleRepo RoleRepository, bindingRepo RoleBindingRepository, membership MembershipChecker, permChecker PermissionChecker, projectChecker ProjectChecker, workspaceChecker WorkspaceChecker, teamChecker TeamChecker, serviceAccountCheck ServiceAccountChecker) *CreateRoleBindingService {
 	return &CreateRoleBindingService{
 		roleRepo: roleRepo, bindingRepo: bindingRepo, membership: membership, permChecker: permChecker,
 		projectChecker: projectChecker, workspaceChecker: workspaceChecker, teamChecker: teamChecker,
+		serviceAccountCheck: serviceAccountCheck,
 	}
 }
 
@@ -54,10 +61,16 @@ func (s *CreateRoleBindingService) Execute(ctx context.Context, in CreateRoleBin
 	}
 
 	if !domain.ValidSubjectTypes[in.SubjectType] {
-		return nil, &domain.ValidationError{Message: "subject.type must be one of: user, team"}
+		return nil, &domain.ValidationError{Message: "subject.type must be one of: user, team, service_account"}
 	}
 	if !domain.ValidScopeTypes[in.ScopeType] {
 		return nil, &domain.ValidationError{Message: "scope.type must be one of: organization, project, workspace"}
+	}
+	if in.Effect == "" {
+		in.Effect = domain.EffectAllow
+	}
+	if !domain.ValidEffects[in.Effect] {
+		return nil, &domain.ValidationError{Message: "effect must be one of: allow, deny"}
 	}
 
 	// docs/architecture/03-domain-model.md §4's Invariant: "a
@@ -90,6 +103,14 @@ func (s *CreateRoleBindingService) Execute(ctx context.Context, in CreateRoleBin
 		if !exists {
 			return nil, &domain.ValidationError{Message: "subject.id is not a team in this organization"}
 		}
+	case domain.SubjectTypeServiceAccount:
+		exists, err := s.serviceAccountCheck.ServiceAccountExists(ctx, in.OrganizationID, in.SubjectID)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, &domain.ValidationError{Message: "subject.id is not a service account in this organization"}
+		}
 	}
 
 	switch in.ScopeType {
@@ -115,7 +136,7 @@ func (s *CreateRoleBindingService) Execute(ctx context.Context, in CreateRoleBin
 		}
 	}
 
-	binding := domain.NewRoleBinding(in.OrganizationID, in.RoleID, in.SubjectType, in.SubjectID, in.ScopeType, in.ScopeID)
+	binding := domain.NewRoleBinding(in.OrganizationID, in.RoleID, in.SubjectType, in.SubjectID, in.ScopeType, in.ScopeID, in.Effect)
 
 	if err := s.bindingRepo.Create(ctx, binding); err != nil {
 		return nil, err

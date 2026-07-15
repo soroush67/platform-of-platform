@@ -125,6 +125,10 @@ type createRoleBindingRequest struct {
 	RoleID  string     `json:"role_id"`
 	Subject subjectRef `json:"subject"`
 	Scope   scopeRef   `json:"scope"`
+	// Effect defaults to "allow" server-side (CreateRoleBindingService)
+	// when omitted - existing clients that don't know about deny
+	// bindings keep getting exactly the behavior they always had.
+	Effect string `json:"effect,omitempty"`
 }
 
 type roleBindingResponse struct {
@@ -135,6 +139,7 @@ type roleBindingResponse struct {
 	SubjectID      string `json:"subject_id"`
 	ScopeType      string `json:"scope_type"`
 	ScopeID        string `json:"scope_id"`
+	Effect         string `json:"effect"`
 	CreatedAt      string `json:"created_at"`
 }
 
@@ -142,7 +147,7 @@ func toRoleBindingResponse(b *domain.RoleBinding) roleBindingResponse {
 	return roleBindingResponse{
 		ID: b.ID, OrganizationID: b.OrganizationID, RoleID: b.RoleID,
 		SubjectType: b.SubjectType, SubjectID: b.SubjectID,
-		ScopeType: b.ScopeType, ScopeID: b.ScopeID,
+		ScopeType: b.ScopeType, ScopeID: b.ScopeID, Effect: b.Effect,
 		CreatedAt: b.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
@@ -170,6 +175,7 @@ func CreateRoleBindingHandler(svc *application.CreateRoleBindingService) http.Ha
 			SubjectID:        req.Subject.ID,
 			ScopeType:        req.Scope.Type,
 			ScopeID:          req.Scope.ID,
+			Effect:           req.Effect,
 		})
 		if err != nil {
 			writeRBACError(w, err)

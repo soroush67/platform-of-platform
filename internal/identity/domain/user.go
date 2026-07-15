@@ -19,6 +19,13 @@ func (e *ValidationError) Error() string { return e.Message }
 var ErrUserNotFound = errors.New("user not found")
 var ErrInvalidCredentials = errors.New("invalid credentials")
 
+// ErrForbidden - same "known member, action their role doesn't grant"
+// meaning as every other context's own sentinel (e.g.
+// tenancy/domain.ErrForbidden), redeclared here per this codebase's
+// no-cross-context-import rule. First real use: ServiceAccount/APIKey
+// management (Identity never had a permission-gated action before).
+var ErrForbidden = errors.New("forbidden")
+
 // AuthSource is a closed set (docs/architecture/03-domain-model.md §3) -
 // a Go type instead of a bare string so an invalid value is a
 // compile-reachable mistake in this package's own tests, the same

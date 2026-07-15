@@ -35,6 +35,8 @@ import (
 	identityhttp "platform-of-platform/internal/identity/adapters/http"
 	identitypg "platform-of-platform/internal/identity/adapters/postgres"
 	identityapp "platform-of-platform/internal/identity/application"
+	identitydomain "platform-of-platform/internal/identity/domain"
+	"platform-of-platform/internal/platform/auth"
 	"platform-of-platform/internal/platform/config"
 	"platform-of-platform/internal/platform/httpserver"
 	"platform-of-platform/internal/platform/idempotency"
@@ -43,6 +45,7 @@ import (
 	rbachttp "platform-of-platform/internal/rbac/adapters/http"
 	rbacpg "platform-of-platform/internal/rbac/adapters/postgres"
 	rbacapp "platform-of-platform/internal/rbac/application"
+	rbacdomain "platform-of-platform/internal/rbac/domain"
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
 	tenancyapp "platform-of-platform/internal/tenancy/application"
@@ -85,6 +88,10 @@ func main() {
 	// Manual wiring, in one place - docs/architecture/18-backend-structure.md §5's
 	// "no DI framework" decision: every dependency is greppable from here.
 	roleBindingRepo := rbacpg.NewRoleBindingRepository(pool)
+	// Constructed early (not with the rest of Identity's wiring below) -
+	// CreateRoleBindingService needs it as a ServiceAccountChecker to
+	// validate subject_type='service_account' bindings.
+	serviceAccountRepo := identitypg.NewServiceAccountRepository(pool)
 
 	orgRepo := tenancypg.NewOrganizationRepository(pool)
 	membershipRepo := tenancypg.NewMembershipRepository(pool)
@@ -115,7 +122,7 @@ func main() {
 	// CreateRoleBindingService needs workspaceRepo (validates
 	// scope.id for scope.type=workspace bindings) - wired here, after
 	// workspaceRepo exists, not up with the other RBAC services above.
-	createRoleBindingService := rbacapp.NewCreateRoleBindingService(roleRepo, roleBindingRepo, membershipRepo, roleBindingRepo, projectRepo, workspaceRepo, teamRepo)
+	createRoleBindingService := rbacapp.NewCreateRoleBindingService(roleRepo, roleBindingRepo, membershipRepo, roleBindingRepo, projectRepo, workspaceRepo, teamRepo, serviceAccountRepo)
 	createEnvironmentService := workspaceapp.NewCreateEnvironmentService(environmentRepo, membershipRepo, roleBindingRepo, projectRepo)
 	listEnvironmentsService := workspaceapp.NewListEnvironmentsService(environmentRepo, membershipRepo, projectRepo)
 	getEnvironmentService := workspaceapp.NewGetEnvironmentService(environmentRepo, membershipRepo, projectRepo)
@@ -173,10 +180,38 @@ func main() {
 	userRepo := identitypg.NewUserRepository(pool)
 	refreshTokenRepo := identitypg.NewRefreshTokenRepository(pool)
 	passwordResetTokenRepo := identitypg.NewPasswordResetTokenRepository(pool)
+	apiKeyRepo := identitypg.NewAPIKeyRepository(pool)
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
 	refreshTokenService := identityapp.NewRefreshTokenService(refreshTokenRepo, userRepo)
 	passwordResetService := identityapp.NewPasswordResetService(passwordResetTokenRepo, userRepo, logger)
+	createServiceAccountService := identityapp.NewCreateServiceAccountService(serviceAccountRepo, membershipRepo, roleBindingRepo)
+	// scopeValidatorFunc closes over rbac/domain.AllPermissions - the
+	// dependency-inversion shape identity/application.ScopeValidator's
+	// own comment describes: Identity can't import rbac/domain directly,
+	// so main.go (which is allowed to see both) bridges the two.
+	createAPIKeyService := identityapp.NewCreateAPIKeyService(apiKeyRepo, serviceAccountRepo, membershipRepo, roleBindingRepo, identityapp.ScopeValidatorFunc(func(scope string) bool {
+		return rbacdomain.AllPermissions[rbacdomain.Permission(scope)]
+	}))
+	revokeAPIKeyService := identityapp.NewRevokeAPIKeyService(apiKeyRepo, membershipRepo, roleBindingRepo)
+
+	// The real API-key authentication path (docs/architecture/13-module-
+	// identity-rbac-tenancy.md §2) - httpserver.RequireAuth calls this for
+	// any bearer token that isn't JWT-shaped. Real validation (expiry,
+	// revocation - APIKey.Valid()), not just "does a row with this hash
+	// exist" - and a real best-effort last_used_at touch on every
+	// successful auth, the same bookkeeping field the doc names.
+	apiKeyResolver := httpserver.APIKeyResolver(func(ctx context.Context, plaintextKey string) (string, error) {
+		key, err := apiKeyRepo.GetByHash(ctx, auth.HashOpaqueToken(plaintextKey))
+		if err != nil {
+			return "", err
+		}
+		if !key.Valid() {
+			return "", identitydomain.ErrAPIKeyInvalid
+		}
+		_ = apiKeyRepo.TouchLastUsed(ctx, key.ID)
+		return key.OwnerID, nil
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
@@ -185,38 +220,41 @@ func main() {
 	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/password-reset/request", identityhttp.RequestPasswordResetHandler(passwordResetService))
 	mux.HandleFunc("POST /api/v1/auth/password-reset/confirm", identityhttp.ConfirmPasswordResetHandler(passwordResetService))
-	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateOrganizationHandler(createOrgService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetOrganizationHandler(getOrgService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.AddMemberHandler(addMemberService)))
-	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/role", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ChangeMemberRoleHandler(changeMemberRoleService)))
-	mux.HandleFunc("DELETE /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ArchiveOrganizationHandler(archiveOrganizationService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/teams", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateTeamHandler(createTeamService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/teams/{team}/members", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.AddTeamMemberHandler(addTeamMemberService)))
-	mux.HandleFunc("DELETE /api/v1/orgs/{id}/teams/{team}/members/{user_id}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.RemoveTeamMemberHandler(removeTeamMemberService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/roles", httpserver.RequireAuth(cfg.JWTSigningKey, rbachttp.CreateRoleHandler(createRoleService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/roles", httpserver.RequireAuth(cfg.JWTSigningKey, rbachttp.ListRolesHandler(listRolesService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/role-bindings", httpserver.RequireAuth(cfg.JWTSigningKey, rbachttp.CreateRoleBindingHandler(createRoleBindingService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/role-bindings", httpserver.RequireAuth(cfg.JWTSigningKey, rbachttp.ListRoleBindingsHandler(listRoleBindingsService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.CreateProjectHandler(createProjectService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.ListProjectsHandler(listProjectsService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}", httpserver.RequireAuth(cfg.JWTSigningKey, tenancyhttp.GetProjectHandler(getProjectService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/environments", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.CreateEnvironmentHandler(createEnvironmentService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/environments", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.ListEnvironmentsHandler(listEnvironmentsService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/environments/{envID}", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.GetEnvironmentHandler(getEnvironmentService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.CreateWorkspaceHandler(createWorkspaceService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.ListWorkspacesHandler(listWorkspacesService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}", httpserver.RequireAuth(cfg.JWTSigningKey, workspacehttp.GetWorkspaceHandler(getWorkspaceService)))
+	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateOrganizationHandler(createOrgService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.GetOrganizationHandler(getOrgService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.AddMemberHandler(addMemberService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/role", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ChangeMemberRoleHandler(changeMemberRoleService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ArchiveOrganizationHandler(archiveOrganizationService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/teams", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateTeamHandler(createTeamService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/teams/{team}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.AddTeamMemberHandler(addTeamMemberService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/teams/{team}/members/{user_id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.RemoveTeamMemberHandler(removeTeamMemberService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/roles", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.CreateRoleHandler(createRoleService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/roles", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.ListRolesHandler(listRolesService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/role-bindings", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.CreateRoleBindingHandler(createRoleBindingService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/role-bindings", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.ListRoleBindingsHandler(listRoleBindingsService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateProjectHandler(createProjectService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListProjectsHandler(listProjectsService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.GetProjectHandler(getProjectService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/environments", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.CreateEnvironmentHandler(createEnvironmentService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/environments", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.ListEnvironmentsHandler(listEnvironmentsService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/environments/{envID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.GetEnvironmentHandler(getEnvironmentService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.CreateWorkspaceHandler(createWorkspaceService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.ListWorkspacesHandler(listWorkspacesService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, workspacehttp.GetWorkspaceHandler(getWorkspaceService)))
 	idempotencyStore := idempotency.NewStore(pool)
-	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, idempotency.Middleware(idempotencyStore, executionhttp.TriggerRunHandler(triggerRunService))))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.ListRunsHandler(listRunsService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.GetRunHandler(getRunService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}/cancel", httpserver.RequireAuth(cfg.JWTSigningKey, executionhttp.CancelRunHandler(cancelRunService)))
-	mux.HandleFunc("POST /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.CreateVariableHandler(createVariableService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ListVariablesHandler(listVariablesService)))
-	mux.HandleFunc("PUT /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.UpdateVariableHandler(updateVariableService)))
-	mux.HandleFunc("DELETE /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.DeleteVariableHandler(deleteVariableService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/variables/resolve", httpserver.RequireAuth(cfg.JWTSigningKey, variableshttp.ResolveVariableHandler(resolveVariableService)))
-	mux.HandleFunc("GET /api/v1/orgs/{id}/audit-log", httpserver.RequireAuth(cfg.JWTSigningKey, audithttp.ListAuditLogHandler(listAuditEntriesService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, idempotency.Middleware(idempotencyStore, executionhttp.TriggerRunHandler(triggerRunService))))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, executionhttp.ListRunsHandler(listRunsService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, executionhttp.GetRunHandler(getRunService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/runs/{runID}/cancel", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, executionhttp.CancelRunHandler(cancelRunService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.CreateVariableHandler(createVariableService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.ListVariablesHandler(listVariablesService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.UpdateVariableHandler(updateVariableService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.DeleteVariableHandler(deleteVariableService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}/workspaces/{workspaceID}/variables/resolve", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, variableshttp.ResolveVariableHandler(resolveVariableService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/audit-log", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, audithttp.ListAuditLogHandler(listAuditEntriesService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/service-accounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateServiceAccountHandler(createServiceAccountService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/service-accounts/{sa}/api-keys", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateAPIKeyHandler(createAPIKeyService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/service-accounts/{sa}/api-keys/{key}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.RevokeAPIKeyHandler(revokeAPIKeyService)))
 
 	server := &http.Server{
 		Addr:    cfg.HTTPAddr,

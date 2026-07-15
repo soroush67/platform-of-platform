@@ -57,3 +57,11 @@ type WorkspaceChecker interface {
 type TeamChecker interface {
 	TeamExists(ctx context.Context, organizationID, teamID string) (bool, error)
 }
+
+// ServiceAccountChecker validates a subject_type='service_account'
+// binding's subject.id actually points at a real ServiceAccount in this
+// org (internal/identity/domain/service_account.go) - same "validate
+// before writing" posture as TeamChecker above.
+type ServiceAccountChecker interface {
+	ServiceAccountExists(ctx context.Context, organizationID, serviceAccountID string) (bool, error)
+}

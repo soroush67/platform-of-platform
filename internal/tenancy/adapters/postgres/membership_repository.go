@@ -44,12 +44,21 @@ func (r *MembershipRepository) Create(ctx context.Context, m *domain.Organizatio
 }
 
 // IsMember scopes to organizationID (so RLS allows reading rows for
-// exactly that org) then checks whether userID has a row in it - this
-// is the real access-control check: unlike organizations' own RLS
+// exactly that org) then checks whether the subject has a row in it -
+// this is the real access-control check: unlike organizations' own RLS
 // (self-referential, satisfiable by anyone who knows the id), this
-// query can genuinely return false for an authenticated user who isn't
-// actually a member.
-func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
+// query can genuinely return false for an authenticated subject who
+// isn't actually a member.
+//
+// A subject can be a User (organization_memberships, the original
+// check) OR a ServiceAccount belonging to this org (service_accounts,
+// migrations/0017_service_accounts_api_keys.up.sql) - a ServiceAccount
+// has no OrganizationMembership row (it's directly scoped to one org by
+// its own organization_id column, never invited/added the way a User
+// is), so without this second check, every existing service's IsMember
+// gate would reject a real, valid, API-key-authenticated ServiceAccount
+// principal outright, before RBAC's own permission check ever ran.
+func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, subjectID string) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -62,8 +71,9 @@ func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, use
 
 	var exists bool
 	err = tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND user_id = $2)`,
-		organizationID, userID,
+		`SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND user_id = $2)
+		    OR EXISTS(SELECT 1 FROM service_accounts WHERE organization_id = $1 AND id = $2)`,
+		organizationID, subjectID,
 	).Scan(&exists)
 	if err != nil {
 		return false, err

@@ -44,9 +44,9 @@ func (r *RoleBindingRepository) AssignRole(ctx context.Context, organizationID, 
 
 	binding := domain.NewOrganizationScopeBinding(organizationID, roleID, userID)
 	_, err = tx.Exec(ctx,
-		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.CreatedAt,
+		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, effect, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.Effect, binding.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -91,9 +91,9 @@ func (r *RoleBindingRepository) ReplaceRole(ctx context.Context, organizationID,
 
 	binding := domain.NewOrganizationScopeBinding(organizationID, roleID, userID)
 	_, err = tx.Exec(ctx,
-		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.CreatedAt,
+		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, effect, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.Effect, binding.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -119,18 +119,27 @@ func (r *RoleBindingRepository) HasPermission(ctx context.Context, organizationI
 // HasPermissionAtScope is the scope-aware evaluation
 // docs/architecture/03-domain-model.md §4 actually specifies: "a binding
 // at a higher scope (Organization) implies the grant at every resource
-// beneath it (Projects, Workspaces)." projectID/workspaceID are nil when
-// the action being checked has no such resource yet (e.g. creating a
-// Workspace has a projectID but no workspaceID; creating a Project has
-// neither). Deliberately pure-additive OR across every matching binding
-// (Kubernetes-RBAC-style), NOT the doc's own "...unless a more specific
-// binding narrows it" - narrowing would need an explicit-deny concept
-// this RoleBinding model doesn't have (every binding today is a grant,
-// never a deny); a real, named simplification, not silently dropped.
-// Matches bindings for the user directly AND for any team the user
-// belongs to (`team_memberships`), the mechanism that makes Team-subject
-// bindings (docs/architecture/03-domain-model.md §2) actually work.
-func (r *RoleBindingRepository) HasPermissionAtScope(ctx context.Context, organizationID, userID, permission string, projectID, workspaceID *string) (bool, error) {
+// beneath it (Projects, Workspaces)... unless a more specific binding
+// narrows it." projectID/workspaceID are nil when the action being
+// checked has no such resource yet (e.g. creating a Workspace has a
+// projectID but no workspaceID; creating a Project has neither).
+//
+// AWS-IAM-style evaluation, not Kubernetes RBAC's pure-additive-only
+// model (the earlier version of this method): every matching binding at
+// any scope level is collected first, then any Deny among them wins
+// unconditionally over every Allow, regardless of which scope each came
+// from - this is the actual mechanism that makes "narrowing" real: an
+// Allow at Organization scope plus a Deny at Workspace scope for the
+// same permission genuinely denies it at that Workspace, which a
+// pure-additive model structurally cannot express (there's no way for
+// a "grant" to ever subtract from another grant).
+//
+// Matches bindings for the subject directly (user OR service_account -
+// both are plain subject_id equality checks, no join needed to tell
+// them apart at this layer) AND for any team the subject belongs to
+// (`team_memberships` - a service_account is never a team member, so
+// that subquery is naturally empty for one, not a special case).
+func (r *RoleBindingRepository) HasPermissionAtScope(ctx context.Context, organizationID, subjectID, permission string, projectID, workspaceID *string) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -141,14 +150,14 @@ func (r *RoleBindingRepository) HasPermissionAtScope(ctx context.Context, organi
 		return false, err
 	}
 
-	var exists bool
+	var allowed bool
 	err = tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM role_bindings rb
+		WITH matches AS (
+			SELECT rb.effect FROM role_bindings rb
 			JOIN roles r ON r.id = rb.role_id
 			WHERE rb.organization_id = $1
 			  AND (
-			    (rb.subject_type = 'user' AND rb.subject_id = $2)
+			    (rb.subject_type IN ('user', 'service_account') AND rb.subject_id = $2)
 			    OR (rb.subject_type = 'team' AND rb.subject_id IN (
 			          SELECT team_id FROM team_memberships WHERE user_id = $2 AND organization_id = $1
 			    ))
@@ -159,14 +168,16 @@ func (r *RoleBindingRepository) HasPermissionAtScope(ctx context.Context, organi
 			    OR ($4::uuid IS NOT NULL AND rb.scope_type = 'workspace' AND rb.scope_id = $4)
 			  )
 			  AND r.permissions @> to_jsonb($5::text)
-		)`,
-		organizationID, userID, projectID, workspaceID, permission,
-	).Scan(&exists)
+		)
+		SELECT EXISTS (SELECT 1 FROM matches WHERE effect = 'allow')
+		   AND NOT EXISTS (SELECT 1 FROM matches WHERE effect = 'deny')`,
+		organizationID, subjectID, projectID, workspaceID, permission,
+	).Scan(&allowed)
 	if err != nil {
 		return false, err
 	}
 
-	return exists, tx.Commit(ctx)
+	return allowed, tx.Commit(ctx)
 }
 
 // Create inserts an arbitrary RoleBinding - the real
@@ -189,10 +200,10 @@ func (r *RoleBindingRepository) Create(ctx context.Context, binding *domain.Role
 	}
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO role_bindings (id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, effect, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (role_id, subject_type, subject_id, scope_type, scope_id) DO NOTHING`,
-		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.CreatedAt,
+		binding.ID, binding.OrganizationID, binding.RoleID, binding.SubjectType, binding.SubjectID, binding.ScopeType, binding.ScopeID, binding.Effect, binding.CreatedAt,
 	)
 	if err != nil {
 		return err
@@ -219,9 +230,9 @@ func (r *RoleBindingRepository) ListForSubject(ctx context.Context, organization
 
 	var rows pgx.Rows
 	if subjectID == "" {
-		rows, err = tx.Query(ctx, `SELECT id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at FROM role_bindings WHERE organization_id = $1 ORDER BY created_at`, organizationID)
+		rows, err = tx.Query(ctx, `SELECT id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, effect, created_at FROM role_bindings WHERE organization_id = $1 ORDER BY created_at`, organizationID)
 	} else {
-		rows, err = tx.Query(ctx, `SELECT id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, created_at FROM role_bindings WHERE organization_id = $1 AND subject_id = $2 ORDER BY created_at`, organizationID, subjectID)
+		rows, err = tx.Query(ctx, `SELECT id, organization_id, role_id, subject_type, subject_id, scope_type, scope_id, effect, created_at FROM role_bindings WHERE organization_id = $1 AND subject_id = $2 ORDER BY created_at`, organizationID, subjectID)
 	}
 	if err != nil {
 		return nil, err
@@ -231,7 +242,7 @@ func (r *RoleBindingRepository) ListForSubject(ctx context.Context, organization
 	var bindings []*domain.RoleBinding
 	for rows.Next() {
 		var b domain.RoleBinding
-		if err := rows.Scan(&b.ID, &b.OrganizationID, &b.RoleID, &b.SubjectType, &b.SubjectID, &b.ScopeType, &b.ScopeID, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.OrganizationID, &b.RoleID, &b.SubjectType, &b.SubjectID, &b.ScopeType, &b.ScopeID, &b.Effect, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		bindings = append(bindings, &b)

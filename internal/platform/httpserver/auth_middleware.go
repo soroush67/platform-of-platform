@@ -12,12 +12,32 @@ type contextKey int
 
 const userIDContextKey contextKey = iota
 
+// APIKeyResolver resolves a presented opaque API key (plaintext, as the
+// caller sent it) to the subject id it authenticates as - a
+// ServiceAccount's id, in this codebase's only real caller today
+// (cmd/control-plane/main.go wires this over identity's
+// APIKeyRepository.GetByHash + auth.HashOpaqueToken). Declared here,
+// not imported from Identity, per this codebase's own no-cross-context-
+// import rule - httpserver is cross-cutting infrastructure, it doesn't
+// get to depend on any one bounded context's domain package.
+type APIKeyResolver func(ctx context.Context, plaintextKey string) (subjectID string, err error)
+
 // RequireAuth parses `Authorization: Bearer <token>`, verifies it, and
-// puts the authenticated user's id on the request context - every
+// puts the authenticated subject's id on the request context - every
 // org-scoped handler downstream reads the Principal's identity from
 // here, never from a client-supplied field, per
-// docs/architecture/04-api-design.md §4's Principal model.
-func RequireAuth(secret []byte, next http.HandlerFunc) http.HandlerFunc {
+// docs/architecture/04-api-design.md §4's Principal model. Accepts
+// EITHER a JWT access token OR a real API key
+// (docs/architecture/13-module-identity-rbac-tenancy.md §2) - resolved
+// via resolveAPIKey, nil-safe (a nil resolver just means "this deployment
+// doesn't wire API-key auth," not a panic). The two are told apart
+// structurally, not by trying one then falling back on any failure: a
+// JWT is always three dot-separated segments (a fixed property of the
+// format itself), this codebase's own opaque tokens
+// (internal/platform/auth.GenerateOpaqueToken, base64.RawURLEncoding)
+// never contain a '.' - so an invalid JWT is still reported as an
+// invalid JWT, not silently retried as a malformed API key.
+func RequireAuth(secret []byte, resolveAPIKey APIKeyResolver, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		token, ok := strings.CutPrefix(header, "Bearer ")
@@ -26,13 +46,28 @@ func RequireAuth(secret []byte, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		userID, err := auth.ParseAccessToken(secret, token)
-		if err != nil {
-			WriteProblem(w, http.StatusUnauthorized, "invalid or expired token", "")
-			return
+		var subjectID string
+		if strings.Count(token, ".") == 2 {
+			userID, err := auth.ParseAccessToken(secret, token)
+			if err != nil {
+				WriteProblem(w, http.StatusUnauthorized, "invalid or expired token", "")
+				return
+			}
+			subjectID = userID
+		} else {
+			if resolveAPIKey == nil {
+				WriteProblem(w, http.StatusUnauthorized, "invalid or expired token", "")
+				return
+			}
+			resolved, err := resolveAPIKey(r.Context(), token)
+			if err != nil {
+				WriteProblem(w, http.StatusUnauthorized, "invalid or expired token", "")
+				return
+			}
+			subjectID = resolved
 		}
 
-		ctx := context.WithValue(r.Context(), userIDContextKey, userID)
+		ctx := context.WithValue(r.Context(), userIDContextKey, subjectID)
 		next(w, r.WithContext(ctx))
 	}
 }

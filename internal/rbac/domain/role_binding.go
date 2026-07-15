@@ -14,20 +14,32 @@ const (
 	ScopeTypeOrganization = "organization"
 	ScopeTypeProject      = "project"
 	ScopeTypeWorkspace    = "workspace"
+
+	// EffectAllow/EffectDeny (migrations/0016_role_binding_effect.up.sql) -
+	// AWS-IAM-style evaluation, not Kubernetes RBAC's pure-additive-only
+	// model: HasPermissionAtScope treats any matching Deny as an
+	// unconditional override of every matching Allow, regardless of
+	// which scope each came from. This is what actually implements
+	// docs/architecture/03-domain-model.md §4's "a binding at a higher
+	// scope implies the grant... unless a more specific binding narrows
+	// it" - an org-wide Allow can now genuinely be narrowed by a single
+	// project- or workspace-scope Deny.
+	EffectAllow = "allow"
+	EffectDeny  = "deny"
 )
 
-// ValidSubjectTypes/ValidScopeTypes - what CreateRoleBindingService
-// actually accepts today. The schema's own CHECK constraints
-// (migrations/0001_init.up.sql) allow 'service_account' as a
-// subject_type too, but no ServiceAccount aggregate exists yet in this
-// codebase (Identity context gap, not RBAC's) - rejecting it here at
-// the application layer, not the database, keeps that gap honest rather
-// than accepting bindings for subjects that can never actually exist.
-var ValidSubjectTypes = map[string]bool{SubjectTypeUser: true, SubjectTypeTeam: true}
+// ValidSubjectTypes/ValidScopeTypes/ValidEffects - what
+// CreateRoleBindingService actually accepts. ServiceAccount is now real
+// (internal/identity/domain/service_account.go) - previously rejected
+// here specifically because no ServiceAccount aggregate existed yet to
+// be a genuine subject.
+var ValidSubjectTypes = map[string]bool{SubjectTypeUser: true, SubjectTypeTeam: true, SubjectTypeServiceAccount: true}
 var ValidScopeTypes = map[string]bool{ScopeTypeOrganization: true, ScopeTypeProject: true, ScopeTypeWorkspace: true}
+var ValidEffects = map[string]bool{EffectAllow: true, EffectDeny: true}
 
-// RoleBinding is the actual grant: "Role R applies to Subject S at Scope
-// T" (docs/architecture/03-domain-model.md §4). User and Team subjects,
+// RoleBinding is the actual grant (or denial - see EffectDeny above):
+// "Role R applies to Subject S at Scope T" (docs/architecture/
+// 03-domain-model.md §4). User/Team/ServiceAccount subjects,
 // Organization/Project/Workspace scopes are all real now - see
 // CreateRoleBindingService for the validation that keeps a binding's
 // scope_id honestly pointed at a resource that exists in this same
@@ -40,16 +52,17 @@ type RoleBinding struct {
 	SubjectID      string
 	ScopeType      string
 	ScopeID        string
+	Effect         string
 	CreatedAt      time.Time
 }
 
 // NewRoleBinding is the generic constructor CreateRoleBindingService uses
 // for the real POST /role-bindings endpoint - unlike
 // NewOrganizationScopeBinding below (kept for the built-in-role
-// bootstrap/replace paths, which are always user+organization), this
-// accepts any of the subject/scope combinations ValidSubjectTypes/
-// ValidScopeTypes now allow.
-func NewRoleBinding(organizationID, roleID, subjectType, subjectID, scopeType, scopeID string) *RoleBinding {
+// bootstrap/replace paths, which are always user+organization+allow),
+// this accepts any of the subject/scope/effect combinations
+// ValidSubjectTypes/ValidScopeTypes/ValidEffects now allow.
+func NewRoleBinding(organizationID, roleID, subjectType, subjectID, scopeType, scopeID, effect string) *RoleBinding {
 	return &RoleBinding{
 		ID:             uuid.NewString(),
 		OrganizationID: organizationID,
@@ -58,6 +71,7 @@ func NewRoleBinding(organizationID, roleID, subjectType, subjectID, scopeType, s
 		SubjectID:      subjectID,
 		ScopeType:      scopeType,
 		ScopeID:        scopeID,
+		Effect:         effect,
 		CreatedAt:      time.Now().UTC(),
 	}
 }
@@ -77,6 +91,7 @@ func NewOrganizationScopeBinding(organizationID, roleID, userID string) *RoleBin
 		SubjectID:      userID,
 		ScopeType:      ScopeTypeOrganization,
 		ScopeID:        organizationID,
+		Effect:         EffectAllow,
 		CreatedAt:      time.Now().UTC(),
 	}
 }
