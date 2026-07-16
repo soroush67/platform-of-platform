@@ -15,14 +15,16 @@ import (
 // upload flow this codebase doesn't have) - a real, named stand-in for
 // the "config_bundle" a real GitOps checkout would supply, one key per
 // engine since a Terraform config and a Compose file are never the same
-// Variable. An ExecutionEngine enum value with no entry here (the other
-// six: opentofu, ansible, helm, packer, kubespray, kubernetes) is
-// handled the same way a genuinely-missing Variable is below - there's
-// no Worker-side engine for it yet regardless of what a Variable might
-// contain.
+// Variable. An ExecutionEngine enum value with no entry here (the
+// remaining three: helm, kubespray, kubernetes) is handled the same way
+// a genuinely-missing Variable is below - there's no Worker-side engine
+// for it yet regardless of what a Variable might contain.
 var configVariableKeyByEngine = map[string]string{
 	"compose":   "compose_file",
 	"terraform": "terraform_config",
+	"opentofu":  "opentofu_config",
+	"ansible":   "ansible_playbook",
+	"packer":    "packer_template",
 }
 
 // RunDispatchService.HandleEvent implements outbox.Handler - subscribes

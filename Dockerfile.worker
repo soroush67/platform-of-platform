@@ -1,12 +1,14 @@
 # Worker image - the one that actually bundles engine tooling
-# (docs/architecture/21-deployment.md §1). Two real engines now (see
+# (docs/architecture/21-deployment.md §1). Five real engines now (see
 # cmd/worker/main.go's own comment): compose (docker.io + docker-compose -
 # docker.io alone doesn't ship the `docker compose` plugin subcommand in
 # this base image, the classic hyphenated docker-compose binary is what's
-# actually available and used) and terraform (installed below, real
-# checksum-verified binary per docs/architecture/21-deployment.md's own
-# "fetched and verified once with real internet access" commitment for
-# Worker plugin binaries).
+# actually available and used), terraform + opentofu + packer (installed
+# below, real checksum-verified binaries per docs/architecture/
+# 21-deployment.md's own "fetched and verified once with real internet
+# access" commitment for Worker plugin binaries), and ansible (installed
+# via a dedicated pip venv, not Debian's own stale `ansible` apt package -
+# see below).
 FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -15,32 +17,92 @@ COPY . .
 RUN CGO_ENABLED=0 go build -buildvcs=false -o /out/worker ./cmd/worker
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose ca-certificates curl unzip \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        docker.io docker-compose ca-certificates curl unzip python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Terraform >=1.6 is BSL 1.1, not MPL - a real, deliberate choice (not an
 # oversight): this platform's own docs describe it as "a Terraform-Cloud-
 # shaped product," and the ExecutionEngine enum (internal/workspace/domain)
 # already carries `opentofu` as a distinct value, a real signal the
-# original design anticipated this exact tradeoff. OpenTofu (Apache-2.0,
-# wire-compatible, same CLI flags, binary named `tofu`) is the lower-risk
-# drop-in swap if BSL ever becomes unacceptable - not built here since the
-# operator explicitly chose Terraform this session. ARG makes a later
-# version bump a one-line diff.
-ARG TERRAFORM_VERSION=1.9.8
-# Downloaded filename deliberately matches SHA256SUMS's own filename
-# column exactly (terraform_<version>_linux_amd64.zip, not a renamed
-# terraform.zip) - sha256sum -c matches lines by literal filename, and a
-# renamed file it can't find isn't a checksum failure, it's a silent
-# false negative (`sha256sum: ...: No such file or directory` - caught
-# for real on the first build attempt, not assumed correct).
+# original design anticipated this exact tradeoff. OpenTofu (installed
+# below too, Apache-2.0, wire-compatible, same CLI flags, binary named
+# `tofu`) is the lower-risk alternative, built for real alongside
+# Terraform this session rather than as a hypothetical someday-swap.
+# Packer (also installed below) moved to BSL 1.1 in the same 2023
+# HashiCorp license change - same note applies to it.
+#
+# Versions are current stable as of this build (checked live against
+# each project's own release feed, not left on old pins) - each ARG
+# makes a later bump a one-line diff.
+ARG TERRAFORM_VERSION=1.15.8
+ARG OPENTOFU_VERSION=1.12.4
+ARG PACKER_VERSION=1.15.4
+
+# Downloaded filenames deliberately match each project's own SHA256SUMS
+# filename column exactly (e.g. terraform_<version>_linux_amd64.zip, not
+# a renamed terraform.zip) - sha256sum -c matches lines by literal
+# filename, and a renamed file it can't find isn't a checksum failure,
+# it's a silent false negative (`sha256sum: ...: No such file or
+# directory` - caught for real on Terraform's own first build attempt,
+# not assumed correct, and applied consistently to OpenTofu/Packer here).
+# Each tool extracts into its own throwaway subdirectory, then only the
+# real binary gets copied out to /usr/local/bin - Terraform/OpenTofu/
+# Packer zips all bundle a same-named LICENSE(.txt)/README.md alongside
+# their binary, so extracting all three straight into /usr/local/bin
+# hits real filename collisions unzip can't resolve non-interactively
+# (caught for real on the first build attempt: Packer's own LICENSE.txt
+# collided with Terraform's already-extracted one, and unzip's
+# overwrite prompt reads EOF in a non-interactive `docker build`,
+# defaults to "None", and exits non-zero - a real, reproducible failure,
+# not a hypothetical).
 RUN cd /tmp \
+    && mkdir terraform-extract && cd terraform-extract \
     && curl -fsSL -O "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
     && curl -fsSL -o SHA256SUMS "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" \
     && grep "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" SHA256SUMS | sha256sum -c - \
-    && unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /usr/local/bin \
-    && rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" SHA256SUMS \
-    && chmod +x /usr/local/bin/terraform
+    && unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+    && cp terraform /usr/local/bin/terraform && chmod +x /usr/local/bin/terraform \
+    && cd /tmp && rm -rf terraform-extract \
+    \
+    && mkdir opentofu-extract && cd opentofu-extract \
+    && curl -fsSL -O "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_linux_amd64.zip" \
+    && curl -fsSL -o SHA256SUMS "https://github.com/opentofu/opentofu/releases/download/v${OPENTOFU_VERSION}/tofu_${OPENTOFU_VERSION}_SHA256SUMS" \
+    && grep "tofu_${OPENTOFU_VERSION}_linux_amd64.zip" SHA256SUMS | sha256sum -c - \
+    && unzip "tofu_${OPENTOFU_VERSION}_linux_amd64.zip" \
+    && cp tofu /usr/local/bin/tofu && chmod +x /usr/local/bin/tofu \
+    && cd /tmp && rm -rf opentofu-extract \
+    \
+    && mkdir packer-extract && cd packer-extract \
+    && curl -fsSL -O "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip" \
+    && curl -fsSL -o SHA256SUMS "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_SHA256SUMS" \
+    && grep "packer_${PACKER_VERSION}_linux_amd64.zip" SHA256SUMS | sha256sum -c - \
+    && unzip "packer_${PACKER_VERSION}_linux_amd64.zip" \
+    && cp packer /usr/local/bin/packer && chmod +x /usr/local/bin/packer \
+    && cd /tmp && rm -rf packer-extract
+
+# Ansible via a dedicated pip venv, not Debian's own `ansible` apt
+# package - real, deliberate choice: bookworm's `ansible` is 7.7.0
+# (~ansible-core 2.14, from 2023), meaningfully behind current stable
+# ansible-core. pip's own package-index integrity model (HTTPS +
+# per-wheel hashes) is the real verification here - no separate manual
+# sha256sum step the way the raw HashiCorp/OpenTofu zip downloads above
+# need.
+#
+# 2.19.11, not the newest ansible-core release overall (2.21.x) - caught
+# for real on the first build attempt: ansible-core >=2.20 requires
+# Python >=3.12, but Debian bookworm's own python3 is 3.11 (confirmed via
+# `pip index versions ansible-core` against a real python:3.11 image).
+# 2.19.11 is the actual newest version compatible with the Python this
+# base image ships, not an arbitrarily older pin.
+RUN python3 -m venv /opt/ansible-venv \
+    && /opt/ansible-venv/bin/pip install --quiet --no-cache-dir ansible-core==2.19.11
+ENV PATH="/opt/ansible-venv/bin:${PATH}"
+
+# packer plugins install into the packer home dir at `packer init` time
+# (internal/worker/engine/packer.go), not at image-build time - the
+# Docker builder plugin isn't bundled with the packer binary itself.
+ENV PACKER_PLUGIN_PATH=/opt/packer-plugins
 
 COPY --from=build /out/worker /usr/local/bin/worker
 ENTRYPOINT ["/usr/local/bin/worker"]

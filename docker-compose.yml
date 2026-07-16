@@ -235,22 +235,34 @@ services:
 
   # Per-Job isolation, partial (docs/architecture/17-workers.md §4 gap) -
   # the raw host docker.sock is mounted into THIS container only, never
-  # into the Worker. The Worker (and therefore any Job's docker-compose
-  # invocation) reaches Docker exclusively through this proxy's scoped
-  # API surface: real writes are possible (CONTAINERS/IMAGES/NETWORKS/
-  # VOLUMES/POST=1, so `docker-compose up` genuinely works), but EXEC,
-  # BUILD, SWARM, SYSTEM, PLUGINS, SECRETS, NODES and SERVICES are all
-  # denied - a Job's compose file can't exec into an unrelated
-  # container, can't touch the Docker daemon's own admin surface, can't
-  # join/inspect swarm state. Honest limit: tecnativa/docker-socket-proxy
-  # scopes by *API endpoint category*, not by container/project
-  # ownership - it does not stop one Job's compose invocation from
-  # listing or manipulating a DIFFERENT Job's containers (both still
-  # share the same Docker daemon's container namespace). Full per-Job
-  # isolation would need a Docker daemon per Job (nested dind) - a much
-  # heavier real option, deliberately not chosen here (operator's own
-  # call, weighing the added complexity against the real but partial
-  # protection this proxy already gives).
+  # into the Worker. The Worker (and therefore any Job's docker-compose/
+  # packer invocation) reaches Docker exclusively through this proxy's
+  # scoped API surface: real writes are possible (CONTAINERS/IMAGES/
+  # NETWORKS/VOLUMES/POST=1, so `docker-compose up` genuinely works), and
+  # EXEC is now also allowed (see below) - but BUILD, SWARM, SYSTEM,
+  # PLUGINS, SECRETS, NODES and SERVICES stay denied: the Docker daemon's
+  # own admin surface, and swarm join/inspect, are still unreachable.
+  # Honest limit: tecnativa/docker-socket-proxy scopes by *API endpoint
+  # category*, not by container/project ownership - it does not stop one
+  # Job's compose or packer invocation from listing or manipulating a
+  # DIFFERENT Job's containers (both still share the same Docker daemon's
+  # container namespace). Full per-Job isolation would need a Docker
+  # daemon per Job (nested dind) - a much heavier real option,
+  # deliberately not chosen here (operator's own call, weighing the added
+  # complexity against the real but partial protection this proxy
+  # already gives).
+  #
+  # EXEC: 1 - a real, deliberate, operator-authorized narrowing of the
+  # boundary above (this service used to deny EXEC entirely). Packer's
+  # Docker builder (internal/worker/engine/packer.go) genuinely needs
+  # `docker exec` to run its provisioners (e.g. a shell provisioner)
+  # inside the container it's building - without it, Packer could only
+  # create a container and copy files into it, never actually run an
+  # install command, which isn't a real image-builder engine. Surfaced
+  # as a real tradeoff and explicitly decided, not silently loosened:
+  # this does mean any Job (not just Packer's own) can now exec into any
+  # OTHER Job's container too, an honest cost on top of the
+  # container-namespace-sharing limit already documented above.
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:latest
     environment:
@@ -260,7 +272,7 @@ services:
       VOLUMES: 1
       POST: 1
       INFO: 1
-      EXEC: 0
+      EXEC: 1
       BUILD: 0
       COMMIT: 0
       CONFIGS: 0
@@ -307,6 +319,20 @@ services:
       # DOCKER_HOST from the environment, and exec.Command inherits this
       # process's environment by default.
       DOCKER_HOST: "tcp://docker-socket-proxy:2375"
+      # Real, caught-for-real fix, not a hypothetical: packer-plugin-
+      # docker v1.1.4 (the current latest release - not a stale pin we
+      # chose) vendors a Docker Go SDK client that defaults to API
+      # version 1.41 when none is negotiated explicitly. This host's
+      # real Docker daemon (29.1.3) now refuses anything below API 1.44
+      # ("client version 1.41 is too old"). docker-compose/docker-compose
+      # CLI (ComposeEngine) never hit this because it negotiates its own
+      # API version already; PackerEngine's `packer build` did, for
+      # real, on the first verification run. DOCKER_API_VERSION pins the
+      # version every Docker Go SDK client in this container negotiates
+      # to instead of falling back to its own hardcoded default - a
+      # standard, documented fix (client.FromEnv reads this exact var),
+      # not a workaround specific to this codebase.
+      DOCKER_API_VERSION: "1.51"
     volumes:
       - mtls-certs:/certs:ro
 

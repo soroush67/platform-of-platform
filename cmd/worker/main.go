@@ -1,12 +1,16 @@
 // The Worker binary (docs/architecture/17-workers.md §1) - maintains
 // the long-lived gRPC connection to the Control Plane and, for each
 // JobAssignment it receives, actually runs the work via one of
-// internal/worker/engine's real Engine implementations. Two real engines
-// exist now: "compose" (docker compose up/down, reusing the same DooD
-// pattern this operator's own compose-platform project already proved
-// this session) and "terraform" (single-shot apply only, local-only
-// providers - see engine.TerraformEngine's own doc comment for the full,
-// deliberate scope).
+// internal/worker/engine's real Engine implementations. Five real
+// engines exist now: "compose" (docker compose up/down, reusing the
+// same DooD pattern this operator's own compose-platform project already
+// proved this session), "terraform"/"opentofu" (single-shot apply only,
+// local-only providers - see engine.TerraformEngine's own doc comment
+// for the full, deliberate scope shared by both), "ansible" (single-shot
+// local-connection playbook run, no remote inventory), and "packer"
+// (Docker-builder image build via the same DooD path compose uses, with
+// docker-socket-proxy's EXEC category now deliberately enabled - see
+// engine.PackerEngine's own doc comment).
 //
 // Deliberately not built here (documented gaps, not silent ones):
 // the plugin-subprocess-over-Unix-socket second layer
@@ -14,16 +18,16 @@
 // engine in-process instead of launching a separate plugin binary per
 // engine type (internal/worker/engine's own package comment); full
 // per-job container isolation (§4) - this process reaches Docker
-// through docker-socket-proxy (docker-compose.yml), not a raw mounted
-// docker.sock, which blocks EXEC/BUILD/SWARM/SYSTEM/PLUGINS/SECRETS/
-// NODES/SERVICES entirely, but the proxy scopes by API endpoint
-// category, not by container ownership - one Job's compose still shares
-// the same container namespace as every other Job's (no nested-dind-
-// per-Job isolation, an explicit, discussed tradeoff, not an oversight);
-// and the other six engine types (opentofu, ansible, helm, packer,
-// kubespray, kubernetes) - compose and terraform were chosen because
-// they're the two this operator has real, already-proven deployment
-// patterns for from this session.
+// through docker-socket-proxy (docker-compose.yml), which still blocks
+// BUILD/SWARM/SYSTEM/PLUGINS/SECRETS/NODES/SERVICES (EXEC is now
+// deliberately allowed, for Packer - see that service's own comment),
+// and the proxy still scopes by API endpoint category, not by container
+// ownership - one Job's compose (or now packer) still shares the same
+// container namespace as every other Job's (no nested-dind-per-Job
+// isolation, an explicit, discussed tradeoff, not an oversight); and the
+// remaining three engine types (helm, kubespray, kubernetes) - all three
+// need a real target (a Kubernetes cluster, or real servers to
+// provision), deliberately deferred rather than built against nothing.
 package main
 
 import (
@@ -107,6 +111,9 @@ func main() {
 	engines := map[string]engine.Engine{
 		"compose":   engine.NewComposeEngine(),
 		"terraform": engine.NewTerraformEngine(),
+		"opentofu":  engine.NewOpenTofuEngine(),
+		"ansible":   engine.NewAnsibleEngine(),
+		"packer":    engine.NewPackerEngine(),
 	}
 
 	// running/runningMu are declared here, not inside runOnce, and

@@ -123,11 +123,34 @@ func TestRunDispatchService_TerraformEngineResolvesTerraformConfigVariable(t *te
 	}
 }
 
-// TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun covers
-// a real ExecutionEngine enum value (Workspace creation already
-// accepts it) that has no configVariableKeyByEngine entry yet - the
-// other six engines this Worker doesn't implement.
-func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T) {
+// TestRunDispatchService_OpenTofuEngineResolvesOpenTofuConfigVariable
+// mirrors the terraform case above - proves the opentofu branch of
+// configVariableKeyByEngine resolves its own distinct key.
+func TestRunDispatchService_OpenTofuEngineResolvesOpenTofuConfigVariable(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "opentofu")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "opentofu_config", `resource "local_file" "x" { filename = "x" content = "y" }`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the opentofu_config variable's content to be dispatched as the config bundle")
+	}
+}
+
+// TestRunDispatchService_AnsibleEngineResolvesAnsiblePlaybookVariable
+// mirrors the terraform case above for the ansible branch.
+func TestRunDispatchService_AnsibleEngineResolvesAnsiblePlaybookVariable(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)
 	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
@@ -135,6 +158,56 @@ func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T
 	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
 	engineReader := newFakeWorkspaceEngineReader()
 	engineReader.set(testOrgID, testWorkspaceID, "ansible")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "ansible_playbook", `- hosts: localhost\n  tasks: []`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the ansible_playbook variable's content to be dispatched as the config bundle")
+	}
+}
+
+// TestRunDispatchService_PackerEngineResolvesPackerTemplateVariable
+// mirrors the terraform case above for the packer branch.
+func TestRunDispatchService_PackerEngineResolvesPackerTemplateVariable(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "packer")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "packer_template", `source "docker" "x" {}`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the packer_template variable's content to be dispatched as the config bundle")
+	}
+}
+
+// TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun covers
+// a real ExecutionEngine enum value (Workspace creation already
+// accepts it) that has no configVariableKeyByEngine entry yet - the
+// remaining three engines this Worker doesn't implement.
+func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "helm")
 	svc := application.NewRunDispatchService(runRepo, engineReader, newFakeVariableResolver(), newFakeWorkerDispatcher(true), locker)
 
 	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
