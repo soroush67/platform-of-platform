@@ -8,13 +8,22 @@ import (
 	"platform-of-platform/internal/platform/outbox"
 )
 
-// configVariableKey is the Variables key a Workspace's config content is
-// resolved from (docs/architecture/03-domain-model.md §7's cascade,
-// reused here rather than building a GitOps/upload flow this codebase
-// doesn't have). Only ever meaningful for the "compose" engine this
-// codebase's Worker actually implements (cmd/worker) - a real, named
-// stand-in for the "config_bundle" a real GitOps checkout would supply.
-const configVariableKey = "compose_file"
+// configVariableKeyByEngine maps each engine the Worker actually
+// implements (cmd/worker, internal/worker/engine) to the Variables key
+// its config content is resolved from (docs/architecture/03-domain-
+// model.md §7's cascade, reused here rather than building a GitOps/
+// upload flow this codebase doesn't have) - a real, named stand-in for
+// the "config_bundle" a real GitOps checkout would supply, one key per
+// engine since a Terraform config and a Compose file are never the same
+// Variable. An ExecutionEngine enum value with no entry here (the other
+// six: opentofu, ansible, helm, packer, kubespray, kubernetes) is
+// handled the same way a genuinely-missing Variable is below - there's
+// no Worker-side engine for it yet regardless of what a Variable might
+// contain.
+var configVariableKeyByEngine = map[string]string{
+	"compose":   "compose_file",
+	"terraform": "terraform_config",
+}
 
 // RunDispatchService.HandleEvent implements outbox.Handler - subscribes
 // to RunQueued events the exact same way Audit's RecordEntryService
@@ -77,6 +86,17 @@ func (s *RunDispatchService) HandleEvent(ctx context.Context, event outbox.Event
 	engine, err := s.engineReader.GetExecutionEngine(ctx, organizationID, workspaceID)
 	if err != nil {
 		return err
+	}
+
+	configVariableKey, hasEngine := configVariableKeyByEngine[engine]
+	if !hasEngine {
+		// A real ExecutionEngine enum value (Workspace creation already
+		// validated it), but no Worker-side engine implements it yet -
+		// same non-transient "fail now, don't retry forever" posture as
+		// a genuinely-missing config Variable below, since no
+		// configVariableKeyByEngine entry will ever appear without a
+		// code change.
+		return s.fail(ctx, run, workspaceID)
 	}
 
 	configBundle, found, err := s.variableResolver.ResolveValue(ctx, organizationID, workspaceID, configVariableKey, run.TriggeredBy)

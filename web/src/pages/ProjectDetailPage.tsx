@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 
 import { useProject } from "../api/hooks/useTenancy";
 import { useCreateEnvironment, useCreateWorkspace, useEnvironments, useWorkspaces } from "../api/hooks/useWorkspace";
+import { EXECUTION_ENGINES } from "../api/types";
 
 export function ProjectDetailPage() {
   const { orgId = "", projectId = "" } = useParams();
@@ -137,7 +138,14 @@ export function ProjectDetailPage() {
           </label>
           <label>
             Execution engine
-            <input value={wsEngine} onChange={(e) => setWsEngine(e.target.value)} required />
+            <select value={wsEngine} onChange={(e) => setWsEngine(e.target.value)}>
+              {EXECUTION_ENGINES.map((eng) => (
+                <option key={eng} value={eng}>
+                  {eng}
+                  {eng !== "compose" && eng !== "terraform" ? " (not yet implemented)" : ""}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Environment (optional)

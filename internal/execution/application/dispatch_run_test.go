@@ -94,6 +94,59 @@ func TestRunDispatchService_NoWorkerAvailableRevertsToQueued(t *testing.T) {
 	}
 }
 
+// TestRunDispatchService_TerraformEngineResolvesTerraformConfigVariable
+// proves configVariableKeyByEngine's own per-engine branch actually
+// picks "terraform_config", not the "compose_file" key a terraform
+// Workspace's Variables would never contain.
+func TestRunDispatchService_TerraformEngineResolvesTerraformConfigVariable(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "terraform")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "terraform_config", `resource "local_file" "x" { filename = "x" content = "y" }`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.calls != 1 {
+		t.Errorf("expected the dispatcher to be called once, got %d", dispatcher.calls)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the terraform_config variable's content to be dispatched as the config bundle")
+	}
+}
+
+// TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun covers
+// a real ExecutionEngine enum value (Workspace creation already
+// accepts it) that has no configVariableKeyByEngine entry yet - the
+// other six engines this Worker doesn't implement.
+func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "ansible")
+	svc := application.NewRunDispatchService(runRepo, engineReader, newFakeVariableResolver(), newFakeWorkerDispatcher(true), locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("expected an unimplemented engine to be handled by failing the run, not returning an error, got: %v", err)
+	}
+	got, _ := runRepo.GetByID(context.Background(), testOrgID, run.ID)
+	if got.Status != domain.RunStatusFailed {
+		t.Errorf("expected the run to be marked failed, got %q", got.Status)
+	}
+}
+
 func TestRunDispatchService_Succeeds(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)

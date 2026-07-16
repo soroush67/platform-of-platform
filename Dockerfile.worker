@@ -1,12 +1,12 @@
 # Worker image - the one that actually bundles engine tooling
-# (docs/architecture/21-deployment.md §1). This walking skeleton
-# implements exactly one real engine (see cmd/worker/main.go's own
-# comment on why: compose), so docker.io + docker-compose are the only
-# engine dependencies here - the same package combination verified for
-# real against a live CockroachDB + Control Plane during this feature's
-# own development (docker.io alone doesn't ship the `docker compose`
-# plugin subcommand in this base image; the classic hyphenated
-# docker-compose binary is what's actually available and used).
+# (docs/architecture/21-deployment.md §1). Two real engines now (see
+# cmd/worker/main.go's own comment): compose (docker.io + docker-compose -
+# docker.io alone doesn't ship the `docker compose` plugin subcommand in
+# this base image, the classic hyphenated docker-compose binary is what's
+# actually available and used) and terraform (installed below, real
+# checksum-verified binary per docs/architecture/21-deployment.md's own
+# "fetched and verified once with real internet access" commitment for
+# Worker plugin binaries).
 FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -15,7 +15,32 @@ COPY . .
 RUN CGO_ENABLED=0 go build -buildvcs=false -o /out/worker ./cmd/worker
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends docker.io docker-compose ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Terraform >=1.6 is BSL 1.1, not MPL - a real, deliberate choice (not an
+# oversight): this platform's own docs describe it as "a Terraform-Cloud-
+# shaped product," and the ExecutionEngine enum (internal/workspace/domain)
+# already carries `opentofu` as a distinct value, a real signal the
+# original design anticipated this exact tradeoff. OpenTofu (Apache-2.0,
+# wire-compatible, same CLI flags, binary named `tofu`) is the lower-risk
+# drop-in swap if BSL ever becomes unacceptable - not built here since the
+# operator explicitly chose Terraform this session. ARG makes a later
+# version bump a one-line diff.
+ARG TERRAFORM_VERSION=1.9.8
+# Downloaded filename deliberately matches SHA256SUMS's own filename
+# column exactly (terraform_<version>_linux_amd64.zip, not a renamed
+# terraform.zip) - sha256sum -c matches lines by literal filename, and a
+# renamed file it can't find isn't a checksum failure, it's a silent
+# false negative (`sha256sum: ...: No such file or directory` - caught
+# for real on the first build attempt, not assumed correct).
+RUN cd /tmp \
+    && curl -fsSL -O "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+    && curl -fsSL -o SHA256SUMS "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" \
+    && grep "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" SHA256SUMS | sha256sum -c - \
+    && unzip "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -d /usr/local/bin \
+    && rm "terraform_${TERRAFORM_VERSION}_linux_amd64.zip" SHA256SUMS \
+    && chmod +x /usr/local/bin/terraform
+
 COPY --from=build /out/worker /usr/local/bin/worker
 ENTRYPOINT ["/usr/local/bin/worker"]

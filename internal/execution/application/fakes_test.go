@@ -265,9 +265,10 @@ func (f *fakeVariableResolver) set(orgID, workspaceID, key, value string) {
 }
 
 type fakeWorkerDispatcher struct {
-	mu         sync.Mutex
-	dispatched bool
-	calls      int
+	mu               sync.Mutex
+	dispatched       bool
+	calls            int
+	lastConfigBundle string
 }
 
 func newFakeWorkerDispatcher(dispatched bool) *fakeWorkerDispatcher {
@@ -278,6 +279,7 @@ func (f *fakeWorkerDispatcher) Dispatch(ctx context.Context, runID, organization
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
+	f.lastConfigBundle = configBundle
 	return f.dispatched, nil
 }
 

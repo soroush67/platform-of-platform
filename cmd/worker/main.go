@@ -1,35 +1,38 @@
 // The Worker binary (docs/architecture/17-workers.md §1) - maintains
 // the long-lived gRPC connection to the Control Plane and, for each
-// JobAssignment it receives, actually runs the work. This walking
-// skeleton implements exactly one real engine: "compose" (docker
-// compose up/down), reusing the same DooD (Docker-outside-of-Docker)
+// JobAssignment it receives, actually runs the work via one of
+// internal/worker/engine's real Engine implementations. Two real engines
+// exist now: "compose" (docker compose up/down, reusing the same DooD
 // pattern this operator's own compose-platform project already proved
-// this session - real `docker compose` commands, not a simulated one.
+// this session) and "terraform" (single-shot apply only, local-only
+// providers - see engine.TerraformEngine's own doc comment for the full,
+// deliberate scope).
 //
 // Deliberately not built here (documented gaps, not silent ones):
 // the plugin-subprocess-over-Unix-socket second layer
-// (docs/architecture/17-workers.md §2) - this Worker executes the
-// compose engine in-process instead of launching a separate plugin
-// binary; full per-job container isolation (§4) - this process reaches
-// Docker through docker-socket-proxy (docker-compose.yml), not a raw
-// mounted docker.sock, which blocks EXEC/BUILD/SWARM/SYSTEM/PLUGINS/
-// SECRETS/NODES/SERVICES entirely, but the proxy scopes by API endpoint
+// (docs/architecture/17-workers.md §2) - this Worker executes every
+// engine in-process instead of launching a separate plugin binary per
+// engine type (internal/worker/engine's own package comment); full
+// per-job container isolation (§4) - this process reaches Docker
+// through docker-socket-proxy (docker-compose.yml), not a raw mounted
+// docker.sock, which blocks EXEC/BUILD/SWARM/SYSTEM/PLUGINS/SECRETS/
+// NODES/SERVICES entirely, but the proxy scopes by API endpoint
 // category, not by container ownership - one Job's compose still shares
 // the same container namespace as every other Job's (no nested-dind-
 // per-Job isolation, an explicit, discussed tradeoff, not an oversight);
-// and the other seven engine types (terraform, opentofu, ansible, helm,
-// packer, kubespray, kubernetes) - "compose" was chosen because it's
-// the one this operator has a real, already-proven deployment pattern
-// for from earlier this session.
+// and the other six engine types (opentofu, ansible, helm, packer,
+// kubespray, kubernetes) - compose and terraform were chosen because
+// they're the two this operator has real, already-proven deployment
+// patterns for from this session.
 package main
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -40,6 +43,7 @@ import (
 	pb "platform-of-platform/internal/execution/adapters/grpc/proto"
 	"platform-of-platform/internal/platform/mtls"
 	"platform-of-platform/internal/platform/tracing"
+	"platform-of-platform/internal/worker/engine"
 )
 
 func main() {
@@ -97,6 +101,14 @@ func main() {
 
 	client := pb.NewWorkerServiceClient(conn)
 
+	// engines is this Worker's real engine registry (internal/worker/
+	// engine) - adding a third engine later means one new map entry
+	// here, nothing else in this file changes.
+	engines := map[string]engine.Engine{
+		"compose":   engine.NewComposeEngine(),
+		"terraform": engine.NewTerraformEngine(),
+	}
+
 	// running/runningMu are declared here, not inside runOnce, and
 	// threaded through every runOnce call - they track this Worker's
 	// actually-in-flight Jobs across stream reconnects, not just within
@@ -112,7 +124,7 @@ func main() {
 	running := make(map[string]*jobHandle)
 
 	for {
-		if err := runOnce(ctx, client, workerID, logger, &runningMu, running); err != nil {
+		if err := runOnce(ctx, client, workerID, logger, &runningMu, running, engines); err != nil {
 			logger.Error("worker stream ended, reconnecting", "error", err)
 		}
 		select {
@@ -140,7 +152,7 @@ type jobHandle struct {
 // couldn't call stream.Recv() again until the current Job finished,
 // which would make Cancel commands impossible to deliver while
 // anything was in flight.
-func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string, logger *slog.Logger, mu *sync.Mutex, running map[string]*jobHandle) error {
+func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string, logger *slog.Logger, mu *sync.Mutex, running map[string]*jobHandle, engines map[string]engine.Engine) error {
 	mu.Lock()
 	activeRunIDs := make([]string, 0, len(running))
 	for runID := range running {
@@ -148,16 +160,22 @@ func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string
 	}
 	mu.Unlock()
 
+	supportedEngines := make([]string, 0, len(engines))
+	for name := range engines {
+		supportedEngines = append(supportedEngines, name)
+	}
+	sort.Strings(supportedEngines) // deterministic Register calls, easier to eyeball in logs
+
 	regResp, err := client.Register(ctx, &pb.RegisterRequest{
 		WorkerId:         workerID,
-		SupportedEngines: []string{"compose"},
+		SupportedEngines: supportedEngines,
 		Labels:           map[string]string{"region": "local"},
 		ActiveRunIds:     activeRunIDs,
 	})
 	if err != nil {
 		return err
 	}
-	logger.Info("registered with control plane", "worker_id", workerID, "accepted", regResp.Accepted, "active_run_ids", activeRunIDs)
+	logger.Info("registered with control plane", "worker_id", workerID, "accepted", regResp.Accepted, "supported_engines", supportedEngines, "active_run_ids", activeRunIDs)
 
 	stream, err := client.StreamJobs(ctx, &pb.StreamJobsRequest{WorkerId: workerID})
 	if err != nil {
@@ -187,7 +205,7 @@ func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string
 					mu.Unlock()
 					cancel() // release jobCtx's own resources either way
 				}()
-				handleJob(jobCtx, client, job, logger)
+				handleJob(jobCtx, client, job, logger, engines)
 			}()
 
 		case *pb.WorkerCommand_CancelJob:
@@ -208,113 +226,32 @@ func runOnce(ctx context.Context, client pb.WorkerServiceClient, workerID string
 	}
 }
 
-// cancelGracePeriod - docs/architecture/17-workers.md §6: "waits a
-// configurable grace period (default 30s), then SIGKILL if it hasn't
-// exited." Shortened via env for real verification (waiting 30 real
-// seconds every test run isn't practical), matching the same pattern
-// already used for the Stale Run Reaper's own timings.
-func cancelGracePeriod() time.Duration {
-	if v := os.Getenv("CANCEL_GRACE_PERIOD"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-	}
-	return 30 * time.Second
-}
-
-func handleJob(ctx context.Context, client pb.WorkerServiceClient, job *pb.JobAssignment, logger *slog.Logger) {
-	if job.ExecutionEngine != "compose" {
-		report(ctx, client, job, "failed", "", "unsupported execution engine: "+job.ExecutionEngine+" (only compose is implemented)")
+func handleJob(ctx context.Context, client pb.WorkerServiceClient, job *pb.JobAssignment, logger *slog.Logger, engines map[string]engine.Engine) {
+	eng, ok := engines[job.ExecutionEngine]
+	if !ok {
+		report(ctx, client, job, "failed", "", "unsupported execution engine: "+job.ExecutionEngine+" (this Worker only implements: see its own Register call)")
 		return
 	}
 
-	tmpFile, err := os.CreateTemp("", "job-*.compose.yml")
-	if err != nil {
-		report(ctx, client, job, "failed", "", "failed to create temp compose file: "+err.Error())
-		return
-	}
-	defer os.Remove(tmpFile.Name())
+	output, err := eng.Execute(ctx, job, logger)
 
-	if _, err := tmpFile.WriteString(job.ConfigBundle); err != nil {
-		tmpFile.Close()
-		report(ctx, client, job, "failed", "", "failed to write compose file: "+err.Error())
-		return
-	}
-	tmpFile.Close()
-
-	projectName := "run-" + job.RunId
-
-	// docker-compose (hyphenated v2 standalone binary), not `docker
-	// compose` (the plugin subcommand) - the plugin isn't installed in
-	// this environment (verified for real: `docker compose` errored
-	// with "unknown shorthand flag" since docker.io doesn't ship it),
-	// the standalone binary is what's actually available.
-	var out bytes.Buffer
-	cmd := exec.Command("docker-compose", "-f", tmpFile.Name(), "-p", projectName, "up", "-d")
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	// Its own process group (docs/architecture/17-workers.md §6: "SIGTERM
-	// to the plugin subprocess's entire process group... a terraform
-	// apply spawns provider subprocesses of its own that need to receive
-	// the signal too" - docker-compose can equally spawn its own
-	// children) - plain exec.CommandContext only ever SIGKILLs the
-	// immediate process on ctx cancellation, with no grace period and no
-	// process-group reach, so this Job manages its own subprocess
-	// lifecycle explicitly instead.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	logger.Info("running docker compose up", "run_id", job.RunId, "project", projectName)
-	if err := cmd.Start(); err != nil {
-		report(ctx, client, job, "failed", "", "failed to start docker-compose: "+err.Error())
-		return
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case runErr := <-done:
-		if runErr != nil {
-			logger.Error("docker compose up failed", "run_id", job.RunId, "error", runErr, "output", out.String())
-			report(ctx, client, job, "failed", out.String(), runErr.Error())
-			return
-		}
-		logger.Info("docker compose up succeeded", "run_id", job.RunId, "output", out.String())
-		report(ctx, client, job, "applied", out.String(), "")
-
-	case <-ctx.Done():
-		// Real cancellation - docs/architecture/17-workers.md §6's exact
-		// sequence: SIGTERM the whole process group, wait a grace
-		// period, SIGKILL if it hasn't exited by then.
-		logger.Info("run canceled, sending SIGTERM to process group", "run_id", job.RunId, "pgid", cmd.Process.Pid)
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-
-		select {
-		case <-done:
-		case <-time.After(cancelGracePeriod()):
-			logger.Info("grace period expired, sending SIGKILL", "run_id", job.RunId)
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-done
-		}
-
-		// Best-effort cleanup of any partially-created resources
-		// (docs/architecture/17-workers.md §6: "the container itself is
-		// destroyed regardless of clean-exit success") - a compose file
-		// with more than one service could have had some, not all, of
-		// its containers created before the kill landed.
-		cleanup := exec.Command("docker-compose", "-f", tmpFile.Name(), "-p", projectName, "down")
-		if out, err := cleanup.CombinedOutput(); err != nil {
-			logger.Error("post-cancel cleanup failed", "run_id", job.RunId, "error", err, "output", string(out))
-		}
-
+	if errors.Is(err, context.Canceled) {
 		// No ReportJobStatus call here - CancelRunService already made
 		// the Run's `canceled` transition synchronously, in the same
 		// request that sent this Worker its CancelJob command
 		// (cmd/control-plane's cancel_run.go). This Job's only
 		// remaining responsibility was to make the real subprocess
-		// actually stop, not to report a second, redundant status.
-		logger.Info("run canceled and cleaned up", "run_id", job.RunId)
+		// actually stop, which the engine itself already did.
+		logger.Info("run canceled", "run_id", job.RunId)
+		return
 	}
+
+	if err != nil {
+		report(ctx, client, job, "failed", output, err.Error())
+		return
+	}
+
+	report(ctx, client, job, "applied", output, "")
 }
 
 func report(ctx context.Context, client pb.WorkerServiceClient, job *pb.JobAssignment, status, logLine, errMsg string) {

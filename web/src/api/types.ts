@@ -129,6 +129,22 @@ export interface Environment {
   created_at: string;
 }
 
+// EXECUTION_ENGINES mirrors internal/workspace/domain's closed
+// ExecutionEngine enum (8 values) - only "compose" and "terraform" have
+// a real Worker-side implementation (internal/worker/engine) today; the
+// other six are accepted at Workspace-creation time but a Run against
+// them will never find a matching Worker.
+export const EXECUTION_ENGINES = [
+  "compose",
+  "terraform",
+  "opentofu",
+  "ansible",
+  "helm",
+  "packer",
+  "kubespray",
+  "kubernetes",
+] as const;
+
 export interface Workspace {
   id: string;
   organization_id: string;
