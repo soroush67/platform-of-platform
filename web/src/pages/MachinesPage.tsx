@@ -8,13 +8,20 @@ import {
   useMachines,
   useTestMachineConnection,
 } from "../api/hooks/useFleet";
-import { useSecretMounts } from "../api/hooks/useSecrets";
+import { useSecretMounts, useWriteSecret } from "../api/hooks/useSecrets";
 import { CREDENTIAL_TYPES, type Machine } from "../api/types";
 
 function statusBadgeClass(status: string): string {
   if (status === "online" || status === "ok") return "badge-success";
   if (status === "unreachable" || status === "missing" || status === "error") return "badge-danger";
   return "badge-dim";
+}
+
+function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 export function MachinesPage() {
@@ -25,6 +32,7 @@ export function MachinesPage() {
   const checkConnection = useCheckMachineConnection(orgId);
   const archiveMachine = useArchiveMachine(orgId);
   const testConnection = useTestMachineConnection(orgId);
+  const writeSecret = useWriteSecret(orgId);
 
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
@@ -33,13 +41,32 @@ export function MachinesPage() {
   const [credentialType, setCredentialType] = useState<(typeof CREDENTIAL_TYPES)[number]>("ssh_key");
   const [credentialMountId, setCredentialMountId] = useState("");
   const [credentialPath, setCredentialPath] = useState("");
+  const [secretValue, setSecretValue] = useState("");
   const [deployBasePath, setDeployBasePath] = useState("/opt/fleet");
   const [formError, setFormError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
 
+  function onNameChange(value: string) {
+    setName(value);
+    // Only auto-fill while the operator hasn't typed a path of their own -
+    // once they have, further name edits shouldn't silently overwrite it.
+    if (!credentialPath || credentialPath.startsWith("secret/data/fleet/machines/")) {
+      setCredentialPath(value ? `secret/data/fleet/machines/${slugify(value)}` : "");
+    }
+  }
+
+  // writeSecretIfProvided stores secretValue into Vault at credentialPath
+  // before Test/Create proceed - KV v2 writes are upserts, so calling
+  // this from both places whenever a value is typed is harmless.
+  async function writeSecretIfProvided() {
+    if (!secretValue) return;
+    await writeSecret.mutateAsync({ mountId: credentialMountId, path: credentialPath, value: secretValue });
+  }
+
   async function onTest() {
     setTestResult(null);
     try {
+      await writeSecretIfProvided();
       const result = await testConnection.mutateAsync({
         host,
         ssh_port: sshPort,
@@ -58,6 +85,7 @@ export function MachinesPage() {
     e.preventDefault();
     setFormError(null);
     try {
+      await writeSecretIfProvided();
       await createMachine.mutateAsync({
         name,
         host,
@@ -72,9 +100,10 @@ export function MachinesPage() {
       setHost("");
       setSshUser("");
       setCredentialPath("");
+      setSecretValue("");
       setTestResult(null);
     } catch {
-      setFormError("Failed to create machine.");
+      setFormError(writeSecret.isError ? "Failed to write the secret to Vault." : "Failed to create machine.");
     }
   }
 
@@ -148,14 +177,14 @@ export function MachinesPage() {
       <div className="card" style={{ marginTop: 20, maxWidth: 560 }}>
         <h3>Add machine</h3>
         <p className="muted">
-          Credentials must already exist in a Secret Mount's Vault (no inline paste-and-encrypt - see the secret
-          mounts page).
+          The secret value below is written directly into the selected Secret Mount's Vault at the given path -
+          nothing to do out-of-band first.
         </p>
         {formError && <div className="error-banner">{formError}</div>}
         <form onSubmit={onSubmit}>
           <label>
             Name
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
+            <input value={name} onChange={(e) => onNameChange(e.target.value)} required />
           </label>
           <div className="field-row">
             <label>
@@ -197,8 +226,17 @@ export function MachinesPage() {
             <input
               value={credentialPath}
               onChange={(e) => setCredentialPath(e.target.value)}
-              placeholder="fleet/machines/this-host"
+              placeholder="secret/data/fleet/machines/this-host"
               required
+            />
+          </label>
+          <label>
+            Secret value ({credentialType === "ssh_key" ? "private key" : "password"})
+            <input
+              type="password"
+              value={secretValue}
+              onChange={(e) => setSecretValue(e.target.value)}
+              placeholder="leave blank if already written to Vault"
             />
           </label>
           <label>
@@ -209,13 +247,15 @@ export function MachinesPage() {
             type="button"
             className="secondary"
             onClick={onTest}
-            disabled={testConnection.isPending || !host || !sshUser || !credentialMountId || !credentialPath}
+            disabled={
+              testConnection.isPending || writeSecret.isPending || !host || !sshUser || !credentialMountId || !credentialPath
+            }
           >
             Test connection
           </button>{" "}
           {testResult && <span className="mono">{testResult}</span>}
           <div>
-            <button type="submit" disabled={createMachine.isPending}>
+            <button type="submit" disabled={createMachine.isPending || writeSecret.isPending}>
               Create
             </button>
           </div>

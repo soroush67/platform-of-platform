@@ -36,12 +36,13 @@ func GetOwnUserHandler(svc *application.GetOwnUserService) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(userResponse{
-			ID:         user.ID,
-			Username:   user.Username,
-			Email:      user.Email,
-			AuthSource: string(user.AuthSource),
-			Status:     user.Status,
-			CreatedAt:  user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			ID:              user.ID,
+			Username:        user.Username,
+			Email:           user.Email,
+			AuthSource:      string(user.AuthSource),
+			Status:          user.Status,
+			CreatedAt:       user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			IsPlatformAdmin: user.IsPlatformAdmin,
 		})
 	}
 }

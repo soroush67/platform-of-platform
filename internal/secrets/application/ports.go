@@ -37,4 +37,10 @@ type PermissionChecker interface {
 type VaultClient interface {
 	TestConnection(ctx context.Context, address, roleID, secretID string) error
 	ReadSecret(ctx context.Context, address, roleID, secretID, path string) (string, error)
+	// WriteSecret writes value as a KV v2 secret at path - lets a caller
+	// (e.g. Fleet's Add Machine form) store a credential directly through
+	// this platform rather than requiring an out-of-band `vault kv put`
+	// first, closing the real UX gap the read-only version of this port
+	// left.
+	WriteSecret(ctx context.Context, address, roleID, secretID, path, value string) error
 }

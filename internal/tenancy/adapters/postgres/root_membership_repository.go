@@ -65,3 +65,15 @@ func (r *RootMembershipRepository) ListOrganizationsForUser(ctx context.Context,
 	}
 	return orgs, rows.Err()
 }
+
+// CountOrganizations - a genuine cross-org COUNT(*) against rootPool
+// (organizations has FORCE ROW LEVEL SECURITY, so the normal app pool
+// would silently report 0 always with no app.current_org_id set - the
+// same reasoning ListOrganizationsForUser's own doc comment already
+// gives). Backs CreateOrganizationService's first-org-ever bootstrap
+// check.
+func (r *RootMembershipRepository) CountOrganizations(ctx context.Context) (int, error) {
+	var count int
+	err := r.rootPool.QueryRow(ctx, `SELECT count(*) FROM organizations`).Scan(&count)
+	return count, err
+}

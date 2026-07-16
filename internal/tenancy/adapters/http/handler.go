@@ -55,6 +55,10 @@ func CreateOrganizationHandler(svc *application.CreateOrganizationService) http.
 				httpserver.WriteProblem(w, http.StatusBadRequest, "validation failed", validationErr.Error())
 				return
 			}
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires platform admin")
+				return
+			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to create organization", "")
 			return
 		}

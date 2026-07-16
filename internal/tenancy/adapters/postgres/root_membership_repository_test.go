@@ -49,6 +49,42 @@ func TestRootMembershipRepository_ReturnsEveryOrgForTheUserOrderedByCreatedAt(t 
 	}
 }
 
+// TestRootMembershipRepository_CountOrganizations_ReflectsRealInsert
+// asserts a delta, not an absolute count - organizations is shared with
+// every other test in this package, so an absolute assertion would be
+// flaky by construction (same reasoning as TestUserRepository_Count's
+// own doc comment).
+func TestRootMembershipRepository_CountOrganizations_ReflectsRealInsert(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	orgRepo := tenancypg.NewOrganizationRepository(pool)
+	rootMembershipRepo := tenancypg.NewRootMembershipRepository(root)
+
+	actorID := insertUser(t, root)
+	before, err := rootMembershipRepo.CountOrganizations(ctx)
+	if err != nil {
+		t.Fatalf("CountOrganizations (before): %v", err)
+	}
+
+	org, _ := domain.NewOrganization("Root Membership Count Org", "root-membership-count-"+uuid.NewString()[:8])
+	if err := orgRepo.Create(ctx, org, actorID); err != nil {
+		t.Fatalf("Create org: %v", err)
+	}
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
+	})
+
+	after, err := rootMembershipRepo.CountOrganizations(ctx)
+	if err != nil {
+		t.Fatalf("CountOrganizations (after): %v", err)
+	}
+	if after != before+1 {
+		t.Errorf("expected CountOrganizations to increase by exactly 1 after a real Create, got before=%d after=%d", before, after)
+	}
+}
+
 func TestRootMembershipRepository_NoMembershipsReturnsEmptyNotError(t *testing.T) {
 	root := dbtest.RootPool(t)
 	rootMembershipRepo := tenancypg.NewRootMembershipRepository(root)

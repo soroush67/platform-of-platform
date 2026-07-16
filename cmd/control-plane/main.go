@@ -158,12 +158,14 @@ func main() {
 	membershipRepo := tenancypg.NewMembershipRepository(pool)
 	projectRepo := tenancypg.NewProjectRepository(pool)
 	teamRepo := tenancypg.NewTeamRepository(pool)
-	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo)
 	getOrgService := tenancyapp.NewGetOrganizationService(orgRepo, membershipRepo)
 	// rootMembershipRepo - a deliberately separate, root-connection-backed
-	// repository used ONLY for ListMyOrganizationsService's genuine
-	// cross-org read (see application.RootMembershipRepository's own doc
-	// comment for the full RLS reasoning).
+	// repository used for ListMyOrganizationsService's genuine cross-org
+	// read (see application.RootMembershipRepository's own doc comment
+	// for the full RLS reasoning) and, via its own CountOrganizations,
+	// CreateOrganizationService's first-org-ever bootstrap check below
+	// (constructed later, once userRepo also exists - it doubles as the
+	// PlatformAdminChecker/PlatformAdminSetter this service needs too).
 	rootMembershipRepo := tenancypg.NewRootMembershipRepository(rootPool)
 	listMyOrganizationsService := tenancyapp.NewListMyOrganizationsService(rootMembershipRepo)
 	addMemberService := tenancyapp.NewAddMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
@@ -227,6 +229,7 @@ func main() {
 	createSecretMountService := secretsapp.NewCreateSecretMountService(secretMountRepo, membershipRepo, roleBindingRepo, cfg.SecretsMasterKey)
 	listSecretMountsService := secretsapp.NewListSecretMountsService(secretMountRepo, membershipRepo)
 	testConnectionService := secretsapp.NewTestConnectionService(secretMountRepo, membershipRepo, roleBindingRepo, vaultClient, cfg.SecretsMasterKey)
+	writeSecretService := secretsapp.NewWriteSecretService(secretMountRepo, membershipRepo, roleBindingRepo, vaultClient, cfg.SecretsMasterKey)
 	resolveSecretService := secretsapp.NewResolveSecretService(secretMountRepo, vaultClient, cfg.SecretsMasterKey)
 
 	// secretMountCheckerFunc bridges Variables' own SecretMountChecker
@@ -344,6 +347,14 @@ func main() {
 	createUserService := identityapp.NewCreateUserService(userRepo)
 	getOwnUserService := identityapp.NewGetOwnUserService(userRepo)
 	authenticateService := identityapp.NewAuthenticateService(userRepo)
+	setPlatformAdminService := identityapp.NewSetPlatformAdminService(userRepo)
+	// createOrgService - Organization creation is gated on platform-admin
+	// status now (userRepo structurally satisfies both PlatformAdminChecker
+	// and PlatformAdminSetter, same "one adapter type satisfies many
+	// contexts' ports" reuse as roleBindingRepo elsewhere in this file) -
+	// constructed here, not with the rest of Tenancy's own wiring above,
+	// since it needs userRepo to exist first.
+	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo, rootMembershipRepo, userRepo, userRepo)
 	refreshTokenService := identityapp.NewRefreshTokenService(refreshTokenRepo, userRepo)
 	passwordResetService := identityapp.NewPasswordResetService(passwordResetTokenRepo, userRepo, logger)
 	createServiceAccountService := identityapp.NewCreateServiceAccountService(serviceAccountRepo, membershipRepo, roleBindingRepo)
@@ -400,6 +411,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
 	mux.HandleFunc("POST /api/v1/users", httpserver.RequireAuthOrFirstUserBootstrap(cfg.JWTSigningKey, apiKeyResolver, userRepo.Count, identityhttp.CreateUserHandler(createUserService)))
+	mux.HandleFunc("PUT /api/v1/users/{id}/platform-admin", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.SetPlatformAdminHandler(setPlatformAdminService)))
 	mux.HandleFunc("GET /api/v1/users/me", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.GetOwnUserHandler(getOwnUserService)))
 	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, loginLimiter, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))
@@ -443,6 +455,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs/{id}/secret-mounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.CreateSecretMountHandler(createSecretMountService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/secret-mounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.ListSecretMountsHandler(listSecretMountsService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/secret-mounts/{mount}/test-connection", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.TestConnectionHandler(testConnectionService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/secret-mounts/{mount}/secrets", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, secretshttp.WriteSecretHandler(writeSecretService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/audit-log", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, audithttp.ListAuditLogHandler(listAuditEntriesService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/service-accounts", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateServiceAccountHandler(createServiceAccountService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/service-accounts/{sa}/api-keys", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateAPIKeyHandler(createAPIKeyService)))

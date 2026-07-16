@@ -31,6 +31,7 @@ export interface User {
   auth_source: string;
   status: string;
   created_at: string;
+  is_platform_admin: boolean;
 }
 
 export interface LoginResponse {

@@ -152,7 +152,7 @@ services:
         vault auth enable approle || true
         vault policy write platform-of-platform-policy - <<'EOF'
         path "secret/data/*" {
-          capabilities = ["read"]
+          capabilities = ["create", "read", "update"]
         }
         EOF
         vault write auth/approle/role/platform-of-platform \

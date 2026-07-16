@@ -13,6 +13,11 @@ type UserRepository interface {
 	GetByID(ctx context.Context, id string) (*domain.User, error)
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 	UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error
+	// IsPlatformAdmin/SetPlatformAdmin back SetPlatformAdminService's own
+	// self-referential gate (an existing platform admin promotes/demotes
+	// another user) - see the RBAC per-menu/org-creation redesign.
+	IsPlatformAdmin(ctx context.Context, userID string) (bool, error)
+	SetPlatformAdmin(ctx context.Context, userID string, isAdmin bool) error
 }
 
 // RefreshTokenRepository is RefreshTokenService's own port - previously

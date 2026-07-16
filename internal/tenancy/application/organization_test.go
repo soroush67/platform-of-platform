@@ -9,17 +9,29 @@ import (
 	"platform-of-platform/internal/tenancy/domain"
 )
 
-func TestCreateOrganizationService_CreatesOrgMembershipAndOwnerRole(t *testing.T) {
+// newCreateOrganizationService wires a CreateOrganizationService with
+// real, independently-controllable fakes for the platform-admin gate -
+// callers configure rootMembership's org count and platformAdmin's
+// admin set per test.
+func newCreateOrganizationService(orgRepo *fakeOrgRepo, membershipRepo *fakeMembershipRepo, roleAssigner *fakeRoleAssigner) (*application.CreateOrganizationService, *fakeRootMembershipRepo, *fakePlatformAdmin) {
+	rootMembership := newFakeRootMembershipRepo()
+	platformAdmin := newFakePlatformAdmin()
+	svc := application.NewCreateOrganizationService(orgRepo, membershipRepo, roleAssigner, rootMembership, platformAdmin, platformAdmin)
+	return svc, rootMembership, platformAdmin
+}
+
+func TestCreateOrganizationService_FirstOrgEverBootstrapsCreatorAsPlatformAdmin(t *testing.T) {
 	orgRepo := newFakeOrgRepo()
 	membershipRepo := newFakeMembershipRepo()
 	roleAssigner := newFakeRoleAssigner()
-	svc := application.NewCreateOrganizationService(orgRepo, membershipRepo, roleAssigner)
+	svc, rootMembership, platformAdmin := newCreateOrganizationService(orgRepo, membershipRepo, roleAssigner)
+	rootMembership.setOrgCount(0) // no Organization exists anywhere yet
 
 	org, err := svc.Execute(context.Background(), application.CreateOrganizationInput{
 		Name: "Acme", Slug: "acme", CreatedByUserID: "user-1",
 	})
 	if err != nil {
-		t.Fatalf("Execute: %v", err)
+		t.Fatalf("expected the platform's first-ever org creation to succeed without any prior admin grant, got: %v", err)
 	}
 
 	if _, err := orgRepo.GetByID(context.Background(), org.ID); err != nil {
@@ -32,11 +44,47 @@ func TestCreateOrganizationService_CreatesOrgMembershipAndOwnerRole(t *testing.T
 	if got := roleAssigner.roleOf(org.ID, "user-1"); got != "owner" {
 		t.Errorf("expected creator to be assigned 'owner', got %q", got)
 	}
+	isAdmin, _ := platformAdmin.IsPlatformAdmin(context.Background(), "user-1")
+	if !isAdmin {
+		t.Error("expected the first-ever org's creator to be granted is_platform_admin as a side effect")
+	}
+}
+
+func TestCreateOrganizationService_NonAdminForbiddenOnceAnOrgAlreadyExists(t *testing.T) {
+	svc, rootMembership, _ := newCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), newFakeRoleAssigner())
+	rootMembership.setOrgCount(1) // the platform's bootstrap window has already closed
+
+	_, err := svc.Execute(context.Background(), application.CreateOrganizationInput{
+		Name: "Acme", Slug: "acme", CreatedByUserID: "user-1",
+	})
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden for a non-platform-admin once at least one org exists, got: %v", err)
+	}
+}
+
+func TestCreateOrganizationService_ExistingPlatformAdminCanCreateAnotherOrg(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	svc, rootMembership, platformAdmin := newCreateOrganizationService(orgRepo, newFakeMembershipRepo(), newFakeRoleAssigner())
+	rootMembership.setOrgCount(1)
+	if err := platformAdmin.SetPlatformAdmin(context.Background(), "admin-1", true); err != nil {
+		t.Fatalf("SetPlatformAdmin: %v", err)
+	}
+
+	org, err := svc.Execute(context.Background(), application.CreateOrganizationInput{
+		Name: "Second Org", Slug: "second-org", CreatedByUserID: "admin-1",
+	})
+	if err != nil {
+		t.Fatalf("expected an existing platform admin to create a second org, got: %v", err)
+	}
+	if _, err := orgRepo.GetByID(context.Background(), org.ID); err != nil {
+		t.Errorf("expected org to be persisted, got: %v", err)
+	}
 }
 
 func TestCreateOrganizationService_InvalidSlugRejectedBeforeAnyWrite(t *testing.T) {
 	orgRepo := newFakeOrgRepo()
-	svc := application.NewCreateOrganizationService(orgRepo, newFakeMembershipRepo(), newFakeRoleAssigner())
+	svc, rootMembership, _ := newCreateOrganizationService(orgRepo, newFakeMembershipRepo(), newFakeRoleAssigner())
+	rootMembership.setOrgCount(0) // bootstrap window - passes the admin gate so slug validation is what's actually being tested
 
 	_, err := svc.Execute(context.Background(), application.CreateOrganizationInput{
 		Name: "Acme", Slug: "Not A Valid Slug!", CreatedByUserID: "user-1",

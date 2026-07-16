@@ -11,7 +11,7 @@ import (
 )
 
 func TestCreateOrganizationHandler_RequiresAuth(t *testing.T) {
-	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{})
+	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{}, newFakeRootMembershipRepo(), newFakePlatformAdmin(), newFakePlatformAdmin())
 	handler := httpadapter.CreateOrganizationHandler(svc)
 
 	req := httptest.NewRequest("POST", "/api/v1/orgs", newReader([]byte(`{}`)))
@@ -24,7 +24,7 @@ func TestCreateOrganizationHandler_RequiresAuth(t *testing.T) {
 }
 
 func TestCreateOrganizationHandler_InvalidJSONBody(t *testing.T) {
-	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{})
+	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{}, newFakeRootMembershipRepo(), newFakePlatformAdmin(), newFakePlatformAdmin())
 	handler := withAuth(httpadapter.CreateOrganizationHandler(svc))
 
 	req := authedRequest(t, "POST", "/api/v1/orgs", "user-1", []byte(`not json`))
@@ -36,8 +36,23 @@ func TestCreateOrganizationHandler_InvalidJSONBody(t *testing.T) {
 	}
 }
 
+func TestCreateOrganizationHandler_ForbiddenWithoutPlatformAdmin(t *testing.T) {
+	rootMembership := newFakeRootMembershipRepo()
+	rootMembership.setOrgCount(1) // bootstrap window already closed
+	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{}, rootMembership, newFakePlatformAdmin(), newFakePlatformAdmin())
+	handler := withAuth(httpadapter.CreateOrganizationHandler(svc))
+
+	req := authedRequest(t, "POST", "/api/v1/orgs", "user-1", []byte(`{"name":"Acme","slug":"acme"}`))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 403 {
+		t.Fatalf("expected 403 for a non-platform-admin once an org already exists, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateOrganizationHandler_ValidationErrorMapsTo400(t *testing.T) {
-	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{})
+	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{}, newFakeRootMembershipRepo(), newFakePlatformAdmin(), newFakePlatformAdmin())
 	handler := withAuth(httpadapter.CreateOrganizationHandler(svc))
 
 	req := authedRequest(t, "POST", "/api/v1/orgs", "user-1", []byte(`{"name":"Acme","slug":"NOT VALID"}`))
@@ -50,7 +65,7 @@ func TestCreateOrganizationHandler_ValidationErrorMapsTo400(t *testing.T) {
 }
 
 func TestCreateOrganizationHandler_Succeeds(t *testing.T) {
-	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{})
+	svc := application.NewCreateOrganizationService(newFakeOrgRepo(), newFakeMembershipRepo(), &fakeRoleAssigner{}, newFakeRootMembershipRepo(), newFakePlatformAdmin(), newFakePlatformAdmin())
 	handler := withAuth(httpadapter.CreateOrganizationHandler(svc))
 
 	req := authedRequest(t, "POST", "/api/v1/orgs", "user-1", []byte(`{"name":"Acme","slug":"acme"}`))

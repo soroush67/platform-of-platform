@@ -21,12 +21,13 @@ type createUserRequest struct {
 }
 
 type userResponse struct {
-	ID         string `json:"id"`
-	Username   string `json:"username"`
-	Email      string `json:"email"`
-	AuthSource string `json:"auth_source"`
-	Status     string `json:"status"`
-	CreatedAt  string `json:"created_at"`
+	ID              string `json:"id"`
+	Username        string `json:"username"`
+	Email           string `json:"email"`
+	AuthSource      string `json:"auth_source"`
+	Status          string `json:"status"`
+	CreatedAt       string `json:"created_at"`
+	IsPlatformAdmin bool   `json:"is_platform_admin"`
 }
 
 // CreateUserHandler implements POST /api/v1/users - see the use case's
@@ -58,13 +59,56 @@ func CreateUserHandler(svc *application.CreateUserService) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(userResponse{
-			ID:         user.ID,
-			Username:   user.Username,
-			Email:      user.Email,
-			AuthSource: string(user.AuthSource),
-			Status:     user.Status,
-			CreatedAt:  user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			ID:              user.ID,
+			Username:        user.Username,
+			Email:           user.Email,
+			AuthSource:      string(user.AuthSource),
+			Status:          user.Status,
+			CreatedAt:       user.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			IsPlatformAdmin: user.IsPlatformAdmin,
 		})
+	}
+}
+
+type setPlatformAdminRequest struct {
+	IsPlatformAdmin bool `json:"is_platform_admin"`
+}
+
+// SetPlatformAdminHandler implements PUT /api/v1/users/{id}/platform-
+// admin - an existing platform admin promotes/demotes another user.
+func SetPlatformAdminHandler(svc *application.SetPlatformAdminService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req setPlatformAdminRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.SetPlatformAdminInput{
+			RequestingUserID: userID,
+			TargetUserID:     r.PathValue("id"),
+			IsPlatformAdmin:  req.IsPlatformAdmin,
+		})
+		if err != nil {
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires platform admin")
+				return
+			}
+			if errors.Is(err, domain.ErrUserNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "user not found", "")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to update platform admin status", "")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

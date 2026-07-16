@@ -152,3 +152,49 @@ func TestConnectionHandler(svc *application.TestConnectionService) http.HandlerF
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+type writeSecretRequest struct {
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+// WriteSecretHandler implements
+// POST /api/v1/orgs/{id}/secret-mounts/{mount}/secrets - 204 on
+// success; never echoes the written value back either way.
+func WriteSecretHandler(svc *application.WriteSecretService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req writeSecretRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.WriteSecretInput{
+			OrganizationID:   r.PathValue("id"),
+			MountID:          r.PathValue("mount"),
+			RequestingUserID: userID,
+			Path:             req.Path,
+			Value:            req.Value,
+		})
+		if err != nil {
+			var validationErr *domain.ValidationError
+			if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrSecretMountNotFound) || errors.As(err, &validationErr) {
+				writeSecretsError(w, err)
+				return
+			}
+			// A real write failure against the backend itself (unreachable,
+			// policy denies write) - 502, same "we reached out on your
+			// behalf and it failed" posture as TestConnectionHandler's own.
+			httpserver.WriteProblem(w, http.StatusBadGateway, "secret write failed", err.Error())
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

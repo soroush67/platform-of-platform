@@ -17,6 +17,19 @@ export function useCreateUser() {
   });
 }
 
+// useSetPlatformAdmin promotes/demotes another user - the requester
+// must already be a platform admin themselves (enforced server-side,
+// SetPlatformAdminService).
+export function useSetPlatformAdmin() {
+  return useMutation({
+    mutationFn: (input: { userId: string; isPlatformAdmin: boolean }) =>
+      apiFetch<void>(`/users/${input.userId}/platform-admin`, {
+        method: "PUT",
+        body: JSON.stringify({ is_platform_admin: input.isPlatformAdmin }),
+      }),
+  });
+}
+
 export function useCreateServiceAccount(orgId: string) {
   return useMutation({
     mutationFn: (input: { name: string; description: string }) =>

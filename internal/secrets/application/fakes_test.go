@@ -111,12 +111,13 @@ func (f *fakePermissionChecker) grant(orgID, userID, permission string) {
 // (the real Vault path gets its own real end-to-end verification
 // against docker-compose's dev-mode Vault service separately).
 type fakeVaultClient struct {
-	mu            sync.Mutex
-	validRoleID   string
-	validSecretID string
-	secretsByPath map[string]string
-	testConnErr   error
-	readSecretErr error
+	mu             sync.Mutex
+	validRoleID    string
+	validSecretID  string
+	secretsByPath  map[string]string
+	testConnErr    error
+	readSecretErr  error
+	writeSecretErr error
 }
 
 func newFakeVaultClient(validRoleID, validSecretID string) *fakeVaultClient {
@@ -149,6 +150,19 @@ func (f *fakeVaultClient) ReadSecret(ctx context.Context, address, roleID, secre
 		return "", errSecretNotFound
 	}
 	return value, nil
+}
+
+func (f *fakeVaultClient) WriteSecret(ctx context.Context, address, roleID, secretID, path, value string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeSecretErr != nil {
+		return f.writeSecretErr
+	}
+	if roleID != f.validRoleID || secretID != f.validSecretID {
+		return errAuthFailed
+	}
+	f.secretsByPath[path] = value
+	return nil
 }
 
 func (f *fakeVaultClient) putSecret(path, value string) {

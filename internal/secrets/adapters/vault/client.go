@@ -106,3 +106,27 @@ func (c *Client) ReadSecret(ctx context.Context, address, roleID, secretID, path
 	}
 	return value, nil
 }
+
+// WriteSecret implements application.VaultClient - a real AppRole login
+// followed by a real KV v2 write at path, wrapping value in the same
+// "data": {"value": ...} envelope ReadSecret unwraps (KV v2's own write
+// API requires the payload nested one level down under "data", the
+// mirror image of the read side's own unwrap). The AppRole policy this
+// codebase provisions (docker-compose.yml's vault-init service) must
+// grant "create"/"update" on "secret/data/*", not just "read", for this
+// to succeed - a real, deliberate widening from the original read-only
+// policy, not a silent assumption.
+func (c *Client) WriteSecret(ctx context.Context, address, roleID, secretID, path, value string) error {
+	client, err := c.login(ctx, address, roleID, secretID)
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Logical().WriteWithContext(ctx, path, map[string]any{
+		"data": map[string]any{secretValueKey: value},
+	})
+	if err != nil {
+		return fmt.Errorf("vault: writing %q: %w", path, err)
+	}
+	return nil
+}

@@ -108,6 +108,26 @@ type PermissionChecker interface {
 // memberships, unlike a hypothetical `GET /orgs?user_id=` would be.
 type RootMembershipRepository interface {
 	ListOrganizationsForUser(ctx context.Context, userID string) ([]*domain.Organization, error)
+	// CountOrganizations backs CreateOrganizationService's own first-
+	// org-ever bootstrap check - a genuine cross-org COUNT(*), same root-
+	// connection exception as ListOrganizationsForUser above (organizations
+	// has FORCE ROW LEVEL SECURITY, so the normal app pool would silently
+	// report 0 always, not the real count).
+	CountOrganizations(ctx context.Context) (int, error)
+}
+
+// PlatformAdminChecker/PlatformAdminSetter are Tenancy's own ports into
+// Identity's User - CreateOrganizationService needs "is this caller a
+// platform admin" without importing identity/domain directly (this
+// codebase's no-cross-context-import rule), same dependency-inversion
+// shape as UserReader/RoleReader above. Satisfied structurally by
+// identity/adapters/postgres.UserRepository in main.go.
+type PlatformAdminChecker interface {
+	IsPlatformAdmin(ctx context.Context, userID string) (bool, error)
+}
+
+type PlatformAdminSetter interface {
+	SetPlatformAdmin(ctx context.Context, userID string, isAdmin bool) error
 }
 
 // ProjectRepository - same shape/reasoning as OrganizationRepository.

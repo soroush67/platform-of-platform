@@ -152,6 +152,39 @@ func TestUserRepository_Count_ReflectsRealInsert(t *testing.T) {
 	}
 }
 
+func TestUserRepository_IsPlatformAdminAndSetPlatformAdmin(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	repo := postgres.NewUserRepository(pool)
+
+	u := mustLocalUser(t)
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM users WHERE id = $1`, u.ID) })
+
+	isAdmin, err := repo.IsPlatformAdmin(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("IsPlatformAdmin (before): %v", err)
+	}
+	if isAdmin {
+		t.Error("expected a freshly-created user to default to is_platform_admin=false")
+	}
+
+	if err := repo.SetPlatformAdmin(ctx, u.ID, true); err != nil {
+		t.Fatalf("SetPlatformAdmin: %v", err)
+	}
+
+	isAdmin, err = repo.IsPlatformAdmin(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("IsPlatformAdmin (after): %v", err)
+	}
+	if !isAdmin {
+		t.Error("expected is_platform_admin=true after SetPlatformAdmin(true)")
+	}
+}
+
 func TestUserRepository_UpdatePasswordHash(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.AppPool(t)

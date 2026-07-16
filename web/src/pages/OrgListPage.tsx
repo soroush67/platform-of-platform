@@ -1,22 +1,31 @@
-import { useState, type FormEvent } from "react";
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { useCreateOrganization, useOrganizations } from "../api/hooks/useTenancy";
+import { useOrganizations } from "../api/hooks/useTenancy";
+import { useAuth } from "../auth/AuthContext";
 
+// OrgListPage is only ever actually seen by a non-platform-admin user
+// who belongs to zero or 2+ organizations - every other case redirects
+// straight past it:
+// - A platform admin never stops here at all, straight to /platform-admin
+//   (organization creation/management lives there now, not as a gate in
+//   front of the app).
+// - A regular user in exactly one organization goes straight into it -
+//   no "pick your one option" screen.
 export function OrgListPage() {
   const { data, isLoading, error } = useOrganizations();
-  const createOrg = useCreateOrganization();
+  const { user } = useAuth();
   const navigate = useNavigate();
-  const [name, setName] = useState("");
-  const [slug, setSlug] = useState("");
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    const org = await createOrg.mutateAsync({ name, slug });
-    setName("");
-    setSlug("");
-    navigate(`/orgs/${org.id}`);
-  }
+  useEffect(() => {
+    if (user?.is_platform_admin) {
+      navigate("/platform-admin", { replace: true });
+      return;
+    }
+    if (data && data.data.length === 1) {
+      navigate(`/orgs/${data.data[0].id}`, { replace: true });
+    }
+  }, [data, user, navigate]);
 
   return (
     <div className="login-shell" style={{ flexDirection: "column", gap: 24 }}>
@@ -24,8 +33,12 @@ export function OrgListPage() {
         <h1>Your organizations</h1>
         {isLoading && <p className="muted">Loading…</p>}
         {error && <div className="error-banner">Failed to load organizations.</div>}
-        {data && data.data.length === 0 && <p className="muted">You aren't a member of any organization yet.</p>}
-        {data && data.data.length > 0 && (
+        {data && data.data.length === 0 && (
+          <p className="muted">
+            You aren't a member of any organization yet - ask a platform admin to add you to one.
+          </p>
+        )}
+        {data && data.data.length > 1 && (
           <table>
             <thead>
               <tr>
@@ -49,23 +62,6 @@ export function OrgListPage() {
             </tbody>
           </table>
         )}
-      </div>
-
-      <div className="card" style={{ width: 480 }}>
-        <h2>Create organization</h2>
-        <form onSubmit={onSubmit}>
-          <label>
-            Name
-            <input value={name} onChange={(e) => setName(e.target.value)} required />
-          </label>
-          <label>
-            Slug
-            <input value={slug} onChange={(e) => setSlug(e.target.value)} required />
-          </label>
-          <button type="submit" disabled={createOrg.isPending}>
-            Create
-          </button>
-        </form>
       </div>
     </div>
   );

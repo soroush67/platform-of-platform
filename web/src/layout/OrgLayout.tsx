@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
 import { useOrganizations } from "../api/hooks/useTenancy";
@@ -46,6 +46,11 @@ export function OrgLayout() {
               </option>
             ))}
           </select>
+          {user?.is_platform_admin && (
+            <Link to="/platform-admin" className="mono" style={{ display: "block", marginTop: 6, fontSize: 12 }}>
+              Platform admin →
+            </Link>
+          )}
         </div>
         <div className="sidebar-nav">
           {NAV_ITEMS.map((item) => (

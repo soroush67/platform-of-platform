@@ -4,6 +4,7 @@ import { RequireAuth } from "./auth/RequireAuth";
 import { OrgLayout } from "./layout/OrgLayout";
 import { LoginPage } from "./pages/LoginPage";
 import { OrgListPage } from "./pages/OrgListPage";
+import { PlatformAdminPage } from "./pages/PlatformAdminPage";
 import { OrgOverviewPage } from "./pages/OrgOverviewPage";
 import { ProjectListPage } from "./pages/ProjectListPage";
 import { ProjectDetailPage } from "./pages/ProjectDetailPage";
@@ -39,6 +40,15 @@ export function App() {
         element={
           <RequireAuth>
             <OrgListPage />
+          </RequireAuth>
+        }
+      />
+
+      <Route
+        path="/platform-admin"
+        element={
+          <RequireAuth>
+            <PlatformAdminPage />
           </RequireAuth>
         }
       />

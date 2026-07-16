@@ -79,6 +79,27 @@ func (f *fakeUserRepo) put(u *domain.User) {
 	f.byID[u.ID] = &cp
 }
 
+func (f *fakeUserRepo) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.byID[userID]
+	if !ok {
+		return false, domain.ErrUserNotFound
+	}
+	return u.IsPlatformAdmin, nil
+}
+
+func (f *fakeUserRepo) SetPlatformAdmin(ctx context.Context, userID string, isAdmin bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.byID[userID]
+	if !ok {
+		return domain.ErrUserNotFound
+	}
+	u.IsPlatformAdmin = isAdmin
+	return nil
+}
+
 type fakeRefreshTokenRepo struct {
 	mu     sync.Mutex
 	tokens map[string]*domain.RefreshToken // by hash

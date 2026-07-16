@@ -63,6 +63,13 @@ type User struct {
 	Status      string
 	MFAEnrolled bool
 	CreatedAt   time.Time
+	// IsPlatformAdmin gates creating an Organization once at least one
+	// already exists (internal/tenancy/application/create_organization.go's
+	// own bootstrap - the very first Organization ever is exempt, its
+	// creator granted this flag as a side effect). Defaults false; there
+	// is no "the" platform owner, multiple platform admins can exist,
+	// promoted by an existing one.
+	IsPlatformAdmin bool
 	// PasswordHash is a bcrypt hash, never a plaintext password - the
 	// domain layer never sees or handles plaintext (Stage 18 §1's "pure
 	// Go, zero third-party imports" rule for /domain means bcrypt itself

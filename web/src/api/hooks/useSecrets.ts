@@ -26,3 +26,19 @@ export function useTestSecretMountConnection(orgId: string) {
       apiFetch<void>(`/orgs/${orgId}/secret-mounts/${mountId}/test-connection`, { method: "POST" }),
   });
 }
+
+// useWriteSecret stores a value directly into a Secret Mount's backing
+// Vault at a given path - lets a form (e.g. Fleet's Add Machine) collect
+// a credential inline instead of requiring an out-of-band `vault kv put`
+// first. KV v2 writes are upserts, so calling this more than once with
+// the same path/value (e.g. from both a "Test connection" and a
+// "Create" click) is always safe.
+export function useWriteSecret(orgId: string) {
+  return useMutation({
+    mutationFn: (input: { mountId: string; path: string; value: string }) =>
+      apiFetch<void>(`/orgs/${orgId}/secret-mounts/${input.mountId}/secrets`, {
+        method: "POST",
+        body: JSON.stringify({ path: input.path, value: input.value }),
+      }),
+  });
+}

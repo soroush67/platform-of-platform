@@ -12,12 +12,23 @@ import (
 	"platform-of-platform/internal/identity/domain"
 )
 
+// userColumns is shared by every SELECT below - Create/GetByUsername/
+// GetByID/GetByEmail all scan the exact same 10-column shape into a
+// *domain.User, previously repeated verbatim at each call site.
+const userColumns = `id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash, is_platform_admin`
+
 type UserRepository struct {
 	pool *pgxpool.Pool
 }
 
 func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 	return &UserRepository{pool: pool}
+}
+
+func scanUser(row interface {
+	Scan(dest ...any) error
+}, user *domain.User) error {
+	return row.Scan(&user.ID, &user.Username, &user.Email, &user.AuthSource, &user.ExternalID, &user.Status, &user.MFAEnrolled, &user.CreatedAt, &user.PasswordHash, &user.IsPlatformAdmin)
 }
 
 // Create inserts a new User row. No RLS, no app.current_org_id scoping -
@@ -27,20 +38,16 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 // connection is correct here, unlike the Tenancy adapter's Create.
 func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO users (id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-		user.ID, user.Username, user.Email, string(user.AuthSource), user.ExternalID, user.Status, user.MFAEnrolled, user.CreatedAt, user.PasswordHash,
+		`INSERT INTO users (id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash, is_platform_admin)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		user.ID, user.Username, user.Email, string(user.AuthSource), user.ExternalID, user.Status, user.MFAEnrolled, user.CreatedAt, user.PasswordHash, user.IsPlatformAdmin,
 	)
 	return err
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	var user domain.User
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash
-		 FROM users WHERE username = $1`,
-		username,
-	).Scan(&user.ID, &user.Username, &user.Email, &user.AuthSource, &user.ExternalID, &user.Status, &user.MFAEnrolled, &user.CreatedAt, &user.PasswordHash)
+	err := scanUser(r.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE username = $1`, username), &user)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrUserNotFound
@@ -55,11 +62,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 // login form), unlike AuthenticateService's own username-keyed lookup.
 func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	var user domain.User
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash
-		 FROM users WHERE id = $1`,
-		id,
-	).Scan(&user.ID, &user.Username, &user.Email, &user.AuthSource, &user.ExternalID, &user.Status, &user.MFAEnrolled, &user.CreatedAt, &user.PasswordHash)
+	err := scanUser(r.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1`, id), &user)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrUserNotFound
@@ -75,11 +78,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id string) (*domain.User, 
 // proves control of the email, not the username).
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	var user domain.User
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, username, email, auth_source, external_id, status, mfa_enrolled, created_at, password_hash
-		 FROM users WHERE email = $1`,
-		email,
-	).Scan(&user.ID, &user.Username, &user.Email, &user.AuthSource, &user.ExternalID, &user.Status, &user.MFAEnrolled, &user.CreatedAt, &user.PasswordHash)
+	err := scanUser(r.pool.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE email = $1`, email), &user)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, domain.ErrUserNotFound
@@ -125,5 +124,27 @@ func (r *UserRepository) GetUser(ctx context.Context, id string) (username, emai
 // after creation.
 func (r *UserRepository) UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error {
 	_, err := r.pool.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, passwordHash)
+	return err
+}
+
+// IsPlatformAdmin/SetPlatformAdmin back Tenancy's own PlatformAdminChecker/
+// PlatformAdminSetter ports (internal/tenancy/application/ports.go) -
+// this repository satisfies both structurally, same "one adapter type
+// satisfies many contexts' ports" convention roleBindingRepo already
+// demonstrates in main.go.
+func (r *UserRepository) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
+	var isAdmin bool
+	err := r.pool.QueryRow(ctx, `SELECT is_platform_admin FROM users WHERE id = $1`, userID).Scan(&isAdmin)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false, domain.ErrUserNotFound
+		}
+		return false, err
+	}
+	return isAdmin, nil
+}
+
+func (r *UserRepository) SetPlatformAdmin(ctx context.Context, userID string, isAdmin bool) error {
+	_, err := r.pool.Exec(ctx, `UPDATE users SET is_platform_admin = $2 WHERE id = $1`, userID, isAdmin)
 	return err
 }

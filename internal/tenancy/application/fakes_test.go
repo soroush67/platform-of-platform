@@ -70,6 +70,7 @@ func (f *fakeOrgRepo) put(org *domain.Organization) {
 type fakeRootMembershipRepo struct {
 	mu           sync.Mutex
 	orgsByUserID map[string][]*domain.Organization
+	orgCount     int
 	err          error
 }
 
@@ -91,6 +92,46 @@ func (f *fakeRootMembershipRepo) addMembership(userID string, org *domain.Organi
 	defer f.mu.Unlock()
 	cp := *org
 	f.orgsByUserID[userID] = append(f.orgsByUserID[userID], &cp)
+}
+
+func (f *fakeRootMembershipRepo) CountOrganizations(ctx context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.orgCount, nil
+}
+
+func (f *fakeRootMembershipRepo) setOrgCount(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orgCount = n
+}
+
+// fakePlatformAdminChecker/fakePlatformAdminSetter back
+// CreateOrganizationService's own PlatformAdminChecker/PlatformAdminSetter
+// ports - a plain in-memory set of admin user ids, shared between the
+// two fakes so a grant made via the setter is immediately visible to the
+// checker (mirrors how one real UserRepository satisfies both ports in
+// production).
+type fakePlatformAdmin struct {
+	mu     sync.Mutex
+	admins map[string]bool
+}
+
+func newFakePlatformAdmin() *fakePlatformAdmin {
+	return &fakePlatformAdmin{admins: map[string]bool{}}
+}
+
+func (f *fakePlatformAdmin) IsPlatformAdmin(ctx context.Context, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.admins[userID], nil
+}
+
+func (f *fakePlatformAdmin) SetPlatformAdmin(ctx context.Context, userID string, isAdmin bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.admins[userID] = isAdmin
+	return nil
 }
 
 type fakeMembershipRepo struct {
