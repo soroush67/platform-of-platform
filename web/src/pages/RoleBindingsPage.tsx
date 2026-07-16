@@ -2,11 +2,14 @@ import { useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 
 import { useCreateRoleBinding, useRoleBindings, useRoles } from "../api/hooks/useRbac";
+import { useMembers, useTeams } from "../api/hooks/useTenancy";
 
 export function RoleBindingsPage() {
   const { orgId = "" } = useParams();
   const { data: bindings, isLoading } = useRoleBindings(orgId);
   const { data: roles } = useRoles(orgId);
+  const { data: members } = useMembers(orgId);
+  const { data: teams } = useTeams(orgId);
   const createBinding = useCreateRoleBinding(orgId);
 
   const [roleId, setRoleId] = useState("");
@@ -97,16 +100,50 @@ export function RoleBindingsPage() {
           <div className="field-row">
             <label>
               Subject type
-              <select value={subjectType} onChange={(e) => setSubjectType(e.target.value)}>
+              <select
+                value={subjectType}
+                onChange={(e) => {
+                  setSubjectType(e.target.value);
+                  setSubjectId("");
+                }}
+              >
                 <option value="user">user</option>
                 <option value="service_account">service_account</option>
                 <option value="team">team</option>
               </select>
             </label>
-            <label>
-              Subject ID
-              <input value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required />
-            </label>
+            {subjectType === "user" && (
+              <label>
+                User
+                <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required>
+                  <option value="">— choose —</option>
+                  {members?.data.map((m) => (
+                    <option key={m.user_id} value={m.user_id}>
+                      {m.username}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {subjectType === "team" && (
+              <label>
+                Team (Group)
+                <select value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required>
+                  <option value="">— choose —</option>
+                  {teams?.data.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {subjectType === "service_account" && (
+              <label>
+                Subject ID
+                <input value={subjectId} onChange={(e) => setSubjectId(e.target.value)} required />
+              </label>
+            )}
           </div>
           <div className="field-row">
             <label>

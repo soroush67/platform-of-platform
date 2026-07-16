@@ -6,17 +6,21 @@ import (
 	"platform-of-platform/internal/tenancy/domain"
 )
 
+// permissionProjectRead/Manage - Projects now have their own dedicated
+// permission (previously reused organization:manage/read - see the
+// RBAC per-menu access-control redesign), mirroring the same
+// one-permission-per-menu split Fleet's own permissions already use.
+// project:manage deliberately stays Owner/Admin-only in BuiltinRoles
+// (Write does not get it) - creating a Project remains an
+// org-structural change, not a day-to-day action, the same reasoning
+// that originally justified reusing organization:manage here.
+const (
+	permissionProjectRead   = "project:read"
+	permissionProjectManage = "project:manage"
+)
+
 // CreateProjectInput implements `POST /api/v1/orgs/{org}/projects`
-// (docs/architecture/04-api-design.md §1). Gated by organization:manage -
-// the same permission that gates adding a member (add_member.go):
-// creating a Project is an org-structural change, not a day-to-day
-// action every "read" member should get, the same reasoning already
-// applied there. No new Permission value was introduced for this -
-// project:manage doesn't exist yet, deliberately: this is the first
-// context where reusing organization:manage instead of minting a
-// narrower permission was the honest call, since nothing in this
-// codebase yet needs to distinguish "can manage org settings/members"
-// from "can create projects."
+// (docs/architecture/04-api-design.md §1). Gated by project:manage.
 type CreateProjectInput struct {
 	OrganizationID   string
 	RequestingUserID string
@@ -49,7 +53,7 @@ func (s *CreateProjectService) Execute(ctx context.Context, in CreateProjectInpu
 		return nil, domain.ErrOrganizationNotFound
 	}
 
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionOrganizationManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionProjectManage)
 	if err != nil {
 		return nil, err
 	}

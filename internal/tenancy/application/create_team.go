@@ -14,6 +14,7 @@ type TeamRepository interface {
 	AddMember(ctx context.Context, membership *domain.TeamMembership) error
 	RemoveMember(ctx context.Context, organizationID, teamID, userID string) error
 	GetByID(ctx context.Context, organizationID, teamID string) (*domain.Team, error)
+	ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Team, error)
 }
 
 // CreateTeamInput implements `POST /orgs/{org}/teams`

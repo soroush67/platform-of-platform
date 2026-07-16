@@ -22,7 +22,7 @@ func TestCreateProjectHandler_ForbiddenWithoutPermission(t *testing.T) {
 	handler(rec, req)
 
 	if rec.Code != 403 {
-		t.Fatalf("expected 403 without organization:manage, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 403 without project:manage, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -33,7 +33,7 @@ func TestCreateProjectHandler_Succeeds(t *testing.T) {
 	membershipRepo := newFakeMembershipRepo()
 	membershipRepo.add(org.ID, "user-1")
 	permChecker := newFakePermissionChecker()
-	permChecker.grant(org.ID, "user-1", "organization:manage")
+	permChecker.grant(org.ID, "user-1", "project:manage")
 	svc := application.NewCreateProjectService(newFakeProjectRepo(), membershipRepo, permChecker, orgRepo)
 	handler := withAuth(httpadapter.CreateProjectHandler(svc))
 
@@ -60,7 +60,9 @@ func TestListProjectsHandler_Succeeds(t *testing.T) {
 	projectRepo.put(p)
 	membershipRepo := newFakeMembershipRepo()
 	membershipRepo.add("org-1", "user-1")
-	svc := application.NewListProjectsService(projectRepo, membershipRepo)
+	permChecker := newFakePermissionChecker()
+	permChecker.grant("org-1", "user-1", "project:read")
+	svc := application.NewListProjectsService(projectRepo, membershipRepo, permChecker)
 	handler := withAuth(httpadapter.ListProjectsHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects", "user-1", nil)
@@ -85,7 +87,9 @@ func TestListProjectsHandler_Succeeds(t *testing.T) {
 func TestGetProjectHandler_UnknownReturnsNotFound(t *testing.T) {
 	membershipRepo := newFakeMembershipRepo()
 	membershipRepo.add("org-1", "user-1")
-	svc := application.NewGetProjectService(newFakeProjectRepo(), membershipRepo)
+	permChecker := newFakePermissionChecker()
+	permChecker.grant("org-1", "user-1", "project:read")
+	svc := application.NewGetProjectService(newFakeProjectRepo(), membershipRepo, permChecker)
 	handler := withAuth(httpadapter.GetProjectHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/nonexistent", "user-1", nil)

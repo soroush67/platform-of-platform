@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 
-import { useAddTeamMember, useCreateTeam, useRemoveTeamMember } from "../api/hooks/useTenancy";
+import { useAddTeamMember, useCreateTeam, useRemoveTeamMember, useTeams } from "../api/hooks/useTenancy";
 import type { Team } from "../api/types";
 
 function TeamCard({ orgId, team }: { orgId: string; team: Team }) {
@@ -34,20 +34,19 @@ function TeamCard({ orgId, team }: { orgId: string; team: Team }) {
   );
 }
 
-// TeamsPage accumulates known teams from create responses only - no
-// `GET /orgs/{id}/teams` list endpoint exists in this API today,
-// deliberately not invented for this UI (see the plan's own note on
-// staying within the two backend endpoints actually added).
+// Teams are the "Group" concept RoleBindingsPage's User/Group access
+// control binds Roles to (see the RBAC per-menu access-control
+// redesign) - a real roster via useTeams, not just what was created
+// this session.
 export function TeamsPage() {
   const { orgId = "" } = useParams();
+  const { data: teams, isLoading } = useTeams(orgId);
   const createTeam = useCreateTeam(orgId);
   const [name, setName] = useState("");
-  const [knownTeams, setKnownTeams] = useState<Team[]>([]);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    const team = await createTeam.mutateAsync(name);
-    setKnownTeams((prev) => [...prev, team]);
+    await createTeam.mutateAsync(name);
     setName("");
   }
 
@@ -56,11 +55,10 @@ export function TeamsPage() {
       <div className="page-header">
         <h1>Teams</h1>
       </div>
-      <p className="muted">
-        No team-roster endpoint exists in this API yet - this page only shows teams created this session.
-      </p>
 
-      {knownTeams.map((t) => (
+      {isLoading && <p className="muted">Loading…</p>}
+      {teams?.data.length === 0 && <p className="muted">No teams yet.</p>}
+      {teams?.data.map((t: Team) => (
         <TeamCard key={t.id} orgId={orgId} team={t} />
       ))}
 

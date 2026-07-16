@@ -345,3 +345,16 @@ func (f *fakeTeamRepo) isMember(teamID, userID string) bool {
 	defer f.mu.Unlock()
 	return f.memberships[teamID+"|"+userID]
 }
+
+func (f *fakeTeamRepo) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Team, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var teams []*domain.Team
+	for _, t := range f.teams {
+		if t.OrganizationID == organizationID {
+			cp := *t
+			teams = append(teams, &cp)
+		}
+	}
+	return teams, nil
+}

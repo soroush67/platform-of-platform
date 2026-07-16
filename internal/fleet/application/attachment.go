@@ -30,7 +30,29 @@ func (s *AttachmentService) checkManage(ctx context.Context, organizationID, req
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileManage)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// checkRead gates the two List* methods below - attaching/detaching a
+// Network or Volume to a ComposeFile is only ever reached from
+// ComposeFileDetailPage, so it's gated by compose_file:* like the rest
+// of that page, not network_volume:*.
+func (s *AttachmentService) checkRead(ctx context.Context, organizationID, requestingUserID string) error {
+	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileRead)
 	if err != nil {
 		return err
 	}
@@ -55,12 +77,8 @@ func (s *AttachmentService) DetachNetwork(ctx context.Context, organizationID, r
 }
 
 func (s *AttachmentService) ListNetworks(ctx context.Context, organizationID, requestingUserID, composeFileID string) ([]*domain.Network, error) {
-	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
-	if err != nil {
+	if err := s.checkRead(ctx, organizationID, requestingUserID); err != nil {
 		return nil, err
-	}
-	if !isMember {
-		return nil, domain.ErrForbidden
 	}
 	return s.repo.ListNetworksForComposeFile(ctx, organizationID, composeFileID)
 }
@@ -83,12 +101,8 @@ func (s *AttachmentService) DetachVolume(ctx context.Context, organizationID, re
 }
 
 func (s *AttachmentService) ListVolumes(ctx context.Context, organizationID, requestingUserID, composeFileID string) ([]VolumeAttachmentView, error) {
-	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
-	if err != nil {
+	if err := s.checkRead(ctx, organizationID, requestingUserID); err != nil {
 		return nil, err
-	}
-	if !isMember {
-		return nil, domain.ErrForbidden
 	}
 	return s.repo.ListVolumesForComposeFile(ctx, organizationID, composeFileID)
 }

@@ -38,7 +38,7 @@ func toProjectResponse(p *domain.Project) projectResponse {
 
 // CreateProjectHandler implements POST /api/v1/orgs/{id}/projects.
 // Registered behind httpserver.RequireAuth in main.go - the use case
-// checks organization:manage, not this handler (same shape as
+// checks project:manage, not this handler (same shape as
 // AddMemberHandler).
 func CreateProjectHandler(svc *application.CreateProjectService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +70,7 @@ func CreateProjectHandler(svc *application.CreateProjectService) http.HandlerFun
 				return
 			}
 			if errors.Is(err, domain.ErrForbidden) {
-				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires organization:manage")
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires project:manage")
 				return
 			}
 			if errors.Is(err, domain.ErrOrganizationNotFound) {
@@ -91,8 +91,8 @@ func CreateProjectHandler(svc *application.CreateProjectService) http.HandlerFun
 	}
 }
 
-// ListProjectsHandler implements GET /api/v1/orgs/{id}/projects -
-// membership-gated only, any role.
+// ListProjectsHandler implements GET /api/v1/orgs/{id}/projects - gated
+// by project:read.
 func ListProjectsHandler(svc *application.ListProjectsService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := httpserver.UserIDFromContext(r.Context())
@@ -107,6 +107,10 @@ func ListProjectsHandler(svc *application.ListProjectsService) http.HandlerFunc 
 		if err != nil {
 			if errors.Is(err, domain.ErrOrganizationNotFound) {
 				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
+				return
+			}
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires project:read")
 				return
 			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to list projects", "")
@@ -124,7 +128,8 @@ func ListProjectsHandler(svc *application.ListProjectsService) http.HandlerFunc 
 	}
 }
 
-// GetProjectHandler implements GET /api/v1/orgs/{id}/projects/{projectID}.
+// GetProjectHandler implements GET /api/v1/orgs/{id}/projects/{projectID} -
+// gated by project:read.
 func GetProjectHandler(svc *application.GetProjectService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := httpserver.UserIDFromContext(r.Context())
@@ -140,6 +145,10 @@ func GetProjectHandler(svc *application.GetProjectService) http.HandlerFunc {
 		if err != nil {
 			if errors.Is(err, domain.ErrOrganizationNotFound) || errors.Is(err, domain.ErrProjectNotFound) {
 				httpserver.WriteProblem(w, http.StatusNotFound, "project not found", "")
+				return
+			}
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires project:read")
 				return
 			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to fetch project", "")

@@ -40,7 +40,7 @@ func (s *CreateMachineService) Execute(ctx context.Context, in CreateMachineInpu
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionMachineManage)
 	if err != nil {
 		return nil, err
 	}
@@ -72,12 +72,13 @@ func (s *CreateMachineService) Execute(ctx context.Context, in CreateMachineInpu
 }
 
 type ListMachinesService struct {
-	repo       MachineRepository
-	membership MembershipChecker
+	repo        MachineRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewListMachinesService(repo MachineRepository, membership MembershipChecker) *ListMachinesService {
-	return &ListMachinesService{repo: repo, membership: membership}
+func NewListMachinesService(repo MachineRepository, membership MembershipChecker, permChecker PermissionChecker) *ListMachinesService {
+	return &ListMachinesService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *ListMachinesService) Execute(ctx context.Context, organizationID, requestingUserID string, includeArchived bool) ([]*domain.Machine, error) {
@@ -88,16 +89,24 @@ func (s *ListMachinesService) Execute(ctx context.Context, organizationID, reque
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionMachineRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, domain.ErrForbidden
+	}
 	return s.repo.ListByOrganization(ctx, organizationID, includeArchived)
 }
 
 type GetMachineService struct {
-	repo       MachineRepository
-	membership MembershipChecker
+	repo        MachineRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewGetMachineService(repo MachineRepository, membership MembershipChecker) *GetMachineService {
-	return &GetMachineService{repo: repo, membership: membership}
+func NewGetMachineService(repo MachineRepository, membership MembershipChecker, permChecker PermissionChecker) *GetMachineService {
+	return &GetMachineService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *GetMachineService) Execute(ctx context.Context, organizationID, requestingUserID, machineID string) (*domain.Machine, error) {
@@ -106,6 +115,13 @@ func (s *GetMachineService) Execute(ctx context.Context, organizationID, request
 		return nil, err
 	}
 	if !isMember {
+		return nil, domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionMachineRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, domain.ErrForbidden
 	}
 	return s.repo.GetByID(ctx, organizationID, machineID)
@@ -141,7 +157,7 @@ func (s *UpdateMachineService) Execute(ctx context.Context, in UpdateMachineInpu
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionMachineManage)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +233,7 @@ func (s *ArchiveMachineService) Execute(ctx context.Context, organizationID, req
 	if !isMember {
 		return false, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionMachineManage)
 	if err != nil {
 		return false, err
 	}
@@ -273,7 +289,7 @@ func (s *TestMachineConnectionService) Execute(ctx context.Context, in TestMachi
 	if !isMember {
 		return "", "", domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionMachineManage)
 	if err != nil {
 		return "", "", err
 	}
@@ -319,7 +335,7 @@ func (s *CheckMachineConnectionService) Execute(ctx context.Context, organizatio
 	}
 	// fleet:read, matching the Python original's own require_machine_access
 	// (any grantee, not admin/manage-only) for this specific action.
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetRead)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionMachineRead)
 	if err != nil {
 		return nil, err
 	}

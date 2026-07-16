@@ -39,7 +39,7 @@ func (s *TriggerOperationService) Execute(ctx context.Context, in TriggerOperati
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetDeploy)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionOperationDeploy)
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +74,13 @@ func (s *TriggerOperationService) Execute(ctx context.Context, in TriggerOperati
 }
 
 type ListOperationsService struct {
-	repo       OperationRepository
-	membership MembershipChecker
+	repo        OperationRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewListOperationsService(repo OperationRepository, membership MembershipChecker) *ListOperationsService {
-	return &ListOperationsService{repo: repo, membership: membership}
+func NewListOperationsService(repo OperationRepository, membership MembershipChecker, permChecker PermissionChecker) *ListOperationsService {
+	return &ListOperationsService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *ListOperationsService) Execute(ctx context.Context, organizationID, requestingUserID, composeFileID, machineID string) ([]*domain.Operation, error) {
@@ -90,16 +91,24 @@ func (s *ListOperationsService) Execute(ctx context.Context, organizationID, req
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionOperationRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, domain.ErrForbidden
+	}
 	return s.repo.ListByOrganization(ctx, organizationID, composeFileID, machineID)
 }
 
 type GetOperationService struct {
-	repo       OperationRepository
-	membership MembershipChecker
+	repo        OperationRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewGetOperationService(repo OperationRepository, membership MembershipChecker) *GetOperationService {
-	return &GetOperationService{repo: repo, membership: membership}
+func NewGetOperationService(repo OperationRepository, membership MembershipChecker, permChecker PermissionChecker) *GetOperationService {
+	return &GetOperationService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *GetOperationService) Execute(ctx context.Context, organizationID, requestingUserID, operationID string) (*domain.Operation, error) {
@@ -108,6 +117,13 @@ func (s *GetOperationService) Execute(ctx context.Context, organizationID, reque
 		return nil, err
 	}
 	if !isMember {
+		return nil, domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionOperationRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, domain.ErrForbidden
 	}
 	return s.repo.GetByID(ctx, organizationID, operationID)

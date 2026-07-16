@@ -6,10 +6,20 @@ import (
 	"platform-of-platform/internal/fleet/domain"
 )
 
+// Each Fleet nav menu (Machines / Networks & volumes / Compose files /
+// Operations) is gated by its own independent permission pair (plus
+// Operations' deploy tier) - replaces the earlier shared
+// fleet:read/manage/deploy, which made it impossible to grant "manage
+// Machines" without also granting "manage Operations."
 const (
-	permissionFleetRead   = "fleet:read"
-	permissionFleetManage = "fleet:manage"
-	permissionFleetDeploy = "fleet:deploy"
+	permissionMachineRead         = "machine:read"
+	permissionMachineManage       = "machine:manage"
+	permissionNetworkVolumeRead   = "network_volume:read"
+	permissionNetworkVolumeManage = "network_volume:manage"
+	permissionComposeFileRead     = "compose_file:read"
+	permissionComposeFileManage   = "compose_file:manage"
+	permissionOperationRead       = "operation:read"
+	permissionOperationDeploy     = "operation:deploy"
 )
 
 type CreateNetworkInput struct {
@@ -37,7 +47,7 @@ func (s *CreateNetworkService) Execute(ctx context.Context, in CreateNetworkInpu
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionNetworkVolumeManage)
 	if err != nil {
 		return nil, err
 	}
@@ -56,12 +66,13 @@ func (s *CreateNetworkService) Execute(ctx context.Context, in CreateNetworkInpu
 }
 
 type ListNetworksService struct {
-	repo       NetworkRepository
-	membership MembershipChecker
+	repo        NetworkRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewListNetworksService(repo NetworkRepository, membership MembershipChecker) *ListNetworksService {
-	return &ListNetworksService{repo: repo, membership: membership}
+func NewListNetworksService(repo NetworkRepository, membership MembershipChecker, permChecker PermissionChecker) *ListNetworksService {
+	return &ListNetworksService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *ListNetworksService) Execute(ctx context.Context, organizationID, requestingUserID string) ([]*domain.Network, error) {
@@ -70,6 +81,13 @@ func (s *ListNetworksService) Execute(ctx context.Context, organizationID, reque
 		return nil, err
 	}
 	if !isMember {
+		return nil, domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, domain.ErrForbidden
 	}
 	return s.repo.ListByOrganization(ctx, organizationID)
@@ -93,7 +111,7 @@ func (s *DeleteNetworkService) Execute(ctx context.Context, organizationID, requ
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeManage)
 	if err != nil {
 		return err
 	}

@@ -89,10 +89,20 @@ export function useCreateProject(orgId: string) {
   });
 }
 
+export function useTeams(orgId: string) {
+  return useQuery({
+    queryKey: ["orgs", orgId, "teams"],
+    queryFn: () => apiFetch<ListResponse<Team>>(`/orgs/${orgId}/teams`),
+    enabled: !!orgId,
+  });
+}
+
 export function useCreateTeam(orgId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (name: string) =>
       apiFetch<Team>(`/orgs/${orgId}/teams`, { method: "POST", body: JSON.stringify({ name }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "teams"] }),
   });
 }
 

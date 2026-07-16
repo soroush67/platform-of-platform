@@ -42,17 +42,45 @@ const (
 	// differentiates the two roles yet - org deletion is the one real,
 	// buildable candidate the docs themselves already named.
 	PermissionOrganizationDelete Permission = "organization:delete"
-	// PermissionFleetRead/Manage/Deploy gate the Fleet context
-	// (internal/fleet - Machines/Networks/Volumes/ComposeFiles/
-	// Operations, the ported compose-platform functionality). Deploy is
+	// PermissionProjectRead/Manage gate Tenancy's Project resource - split
+	// out from organization:manage (which create_project.go used to
+	// reuse) so a Role can grant "create/manage Projects" independently
+	// of every other org-structural action, matching the same
+	// one-permission-per-menu split Fleet's own permissions below use.
+	PermissionProjectRead   Permission = "project:read"
+	PermissionProjectManage Permission = "project:manage"
+	// PermissionMachineRead/Manage, PermissionNetworkVolumeRead/Manage,
+	// PermissionComposeFileRead/Manage, PermissionOperationRead/Deploy
+	// each gate exactly one Fleet (internal/fleet - the ported
+	// compose-platform functionality) nav menu independently - replaces
+	// the earlier fleet:read/manage/deploy, which bundled all of
+	// Machines/Networks/Volumes/ComposeFiles/Operations behind one
+	// shared permission and made it impossible to grant a Role "manage
+	// Machines" without also granting "manage Operations." Deploy is
 	// kept distinct from Manage for the same reason workspace:apply is
-	// distinct from workspace:manage above - triggering a real SSH
-	// deploy against a real remote machine is a materially
-	// higher-consequence action than managing the catalog resources
-	// themselves, even though both sit at the same Write-role tier today.
-	PermissionFleetRead   Permission = "fleet:read"
-	PermissionFleetManage Permission = "fleet:manage"
-	PermissionFleetDeploy Permission = "fleet:deploy"
+	// distinct from workspace:manage - triggering a real SSH deploy
+	// against a real remote machine is a materially higher-consequence
+	// action than managing the catalog resources themselves.
+	PermissionMachineRead   Permission = "machine:read"
+	PermissionMachineManage Permission = "machine:manage"
+	// PermissionNetworkVolumeRead/Manage gates BOTH the Network and
+	// Volume catalogs as one pair - "Networks & volumes" is a single
+	// combined nav menu/page, not two, so it gets one permission pair
+	// like every other menu does.
+	PermissionNetworkVolumeRead   Permission = "network_volume:read"
+	PermissionNetworkVolumeManage Permission = "network_volume:manage"
+	// PermissionComposeFileRead/Manage also gates fleet_variables CRUD
+	// and attaching/detaching a Network or Volume TO a ComposeFile
+	// (AttachmentService, variable.go) - both of those are only ever
+	// reached from ComposeFileDetailPage, itself only reachable via the
+	// Compose files menu.
+	PermissionComposeFileRead   Permission = "compose_file:read"
+	PermissionComposeFileManage Permission = "compose_file:manage"
+	// PermissionOperationRead/Deploy - Operations has no separate
+	// "manage" tier: the only mutating action on this menu is triggering
+	// a real SSH deploy, so Deploy is its one write-tier permission.
+	PermissionOperationRead   Permission = "operation:read"
+	PermissionOperationDeploy Permission = "operation:deploy"
 )
 
 // AllPermissions is the fixed, versioned enum
@@ -62,15 +90,22 @@ const (
 // in a custom Role's request against this set - not against BuiltinRoles'
 // own values, which are a curated subset, not the full enum.
 var AllPermissions = map[Permission]bool{
-	PermissionOrganizationRead:   true,
-	PermissionOrganizationManage: true,
-	PermissionOrganizationDelete: true,
-	PermissionWorkspaceRead:      true,
-	PermissionWorkspaceManage:    true,
-	PermissionWorkspaceApply:     true,
-	PermissionFleetRead:          true,
-	PermissionFleetManage:        true,
-	PermissionFleetDeploy:        true,
+	PermissionOrganizationRead:    true,
+	PermissionOrganizationManage:  true,
+	PermissionOrganizationDelete:  true,
+	PermissionProjectRead:         true,
+	PermissionProjectManage:       true,
+	PermissionWorkspaceRead:       true,
+	PermissionWorkspaceManage:     true,
+	PermissionWorkspaceApply:      true,
+	PermissionMachineRead:         true,
+	PermissionMachineManage:       true,
+	PermissionNetworkVolumeRead:   true,
+	PermissionNetworkVolumeManage: true,
+	PermissionComposeFileRead:     true,
+	PermissionComposeFileManage:   true,
+	PermissionOperationRead:       true,
+	PermissionOperationDeploy:     true,
 }
 
 // Built-in role names (docs/architecture/03-domain-model.md §4's
@@ -95,15 +130,50 @@ const (
 // themselves named, not a full "everything TFC's Owner role can do."
 // Write/Read diverge the same way they always have: creating/managing a
 // Workspace (workspace:manage) is a day-to-day action a Write-roled
-// member gets and a Read-roled one doesn't, while creating a Project or
-// Environment stays gated by organization:manage (an org-structural
-// decision, deliberately not opened up to Write - see
-// create_project.go and create_environment.go's own comments).
+// member gets and a Read-roled one doesn't. project:manage is
+// deliberately NOT given to Write either (an org-structural decision,
+// same as before this permission had its own name - see
+// create_project.go's own comment) - every other new per-menu
+// permission below (machine/network_volume/compose_file/operation)
+// keeps the tier Fleet's own permissions already had (Write gets
+// manage/deploy), unchanged from before the fleet:* split.
 var BuiltinRoles = map[string][]Permission{
-	RoleOwner: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionOrganizationDelete, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionFleetRead, PermissionFleetManage, PermissionFleetDeploy},
-	RoleAdmin: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionFleetRead, PermissionFleetManage, PermissionFleetDeploy},
-	RoleWrite: {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionFleetRead, PermissionFleetManage, PermissionFleetDeploy},
-	RoleRead:  {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionFleetRead},
+	RoleOwner: {
+		PermissionOrganizationRead, PermissionOrganizationManage, PermissionOrganizationDelete,
+		PermissionProjectRead, PermissionProjectManage,
+		PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply,
+		PermissionMachineRead, PermissionMachineManage,
+		PermissionNetworkVolumeRead, PermissionNetworkVolumeManage,
+		PermissionComposeFileRead, PermissionComposeFileManage,
+		PermissionOperationRead, PermissionOperationDeploy,
+	},
+	RoleAdmin: {
+		PermissionOrganizationRead, PermissionOrganizationManage,
+		PermissionProjectRead, PermissionProjectManage,
+		PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply,
+		PermissionMachineRead, PermissionMachineManage,
+		PermissionNetworkVolumeRead, PermissionNetworkVolumeManage,
+		PermissionComposeFileRead, PermissionComposeFileManage,
+		PermissionOperationRead, PermissionOperationDeploy,
+	},
+	RoleWrite: {
+		PermissionOrganizationRead,
+		PermissionProjectRead,
+		PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply,
+		PermissionMachineRead, PermissionMachineManage,
+		PermissionNetworkVolumeRead, PermissionNetworkVolumeManage,
+		PermissionComposeFileRead, PermissionComposeFileManage,
+		PermissionOperationRead, PermissionOperationDeploy,
+	},
+	RoleRead: {
+		PermissionOrganizationRead,
+		PermissionProjectRead,
+		PermissionWorkspaceRead,
+		PermissionMachineRead,
+		PermissionNetworkVolumeRead,
+		PermissionComposeFileRead,
+		PermissionOperationRead,
+	},
 }
 
 // Role is the RBAC aggregate root - docs/architecture/03-domain-model.md

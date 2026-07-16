@@ -31,7 +31,7 @@ func (s *CreateVolumeService) Execute(ctx context.Context, in CreateVolumeInput)
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionNetworkVolumeManage)
 	if err != nil {
 		return nil, err
 	}
@@ -50,12 +50,13 @@ func (s *CreateVolumeService) Execute(ctx context.Context, in CreateVolumeInput)
 }
 
 type ListVolumesService struct {
-	repo       VolumeRepository
-	membership MembershipChecker
+	repo        VolumeRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewListVolumesService(repo VolumeRepository, membership MembershipChecker) *ListVolumesService {
-	return &ListVolumesService{repo: repo, membership: membership}
+func NewListVolumesService(repo VolumeRepository, membership MembershipChecker, permChecker PermissionChecker) *ListVolumesService {
+	return &ListVolumesService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *ListVolumesService) Execute(ctx context.Context, organizationID, requestingUserID string) ([]*domain.Volume, error) {
@@ -64,6 +65,13 @@ func (s *ListVolumesService) Execute(ctx context.Context, organizationID, reques
 		return nil, err
 	}
 	if !isMember {
+		return nil, domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, domain.ErrForbidden
 	}
 	return s.repo.ListByOrganization(ctx, organizationID)
@@ -87,7 +95,7 @@ func (s *DeleteVolumeService) Execute(ctx context.Context, organizationID, reque
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeManage)
 	if err != nil {
 		return err
 	}

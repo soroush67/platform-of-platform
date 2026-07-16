@@ -37,7 +37,7 @@ func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableIn
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionComposeFileManage)
 	if err != nil {
 		return nil, err
 	}
@@ -72,12 +72,13 @@ func (s *CreateVariableService) Execute(ctx context.Context, in CreateVariableIn
 }
 
 type ListVariablesService struct {
-	repo       VariableRepository
-	membership MembershipChecker
+	repo        VariableRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewListVariablesService(repo VariableRepository, membership MembershipChecker) *ListVariablesService {
-	return &ListVariablesService{repo: repo, membership: membership}
+func NewListVariablesService(repo VariableRepository, membership MembershipChecker, permChecker PermissionChecker) *ListVariablesService {
+	return &ListVariablesService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 // Execute masks secret-typed values the same way the ported Python
@@ -89,6 +90,13 @@ func (s *ListVariablesService) Execute(ctx context.Context, organizationID, requ
 		return nil, err
 	}
 	if !isMember {
+		return nil, domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, domain.ErrForbidden
 	}
 	variables, err := s.repo.ListByComposeFile(ctx, organizationID, composeFileID)
@@ -132,7 +140,7 @@ func (s *UpdateVariableService) Execute(ctx context.Context, in UpdateVariableIn
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionComposeFileManage)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +206,7 @@ func (s *DeleteVariableService) Execute(ctx context.Context, organizationID, req
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileManage)
 	if err != nil {
 		return err
 	}

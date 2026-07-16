@@ -73,6 +73,33 @@ func CreateTeamHandler(svc *application.CreateTeamService) http.HandlerFunc {
 	}
 }
 
+// ListTeamsHandler implements GET /api/v1/orgs/{id}/teams - the Team
+// roster ("Group" in the RBAC per-menu access-control redesign), same
+// membership-gated shape as ListMembersHandler.
+func ListTeamsHandler(svc *application.ListTeamsService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		teams, err := svc.Execute(r.Context(), r.PathValue("id"), userID)
+		if err != nil {
+			writeTeamError(w, err, "organization not found")
+			return
+		}
+
+		responses := make([]teamResponse, 0, len(teams))
+		for _, t := range teams {
+			responses = append(responses, toTeamResponse(t))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+	}
+}
+
 type addTeamMemberRequest struct {
 	UserID string `json:"user_id"`
 }

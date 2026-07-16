@@ -32,7 +32,7 @@ func (s *CreateComposeFileService) Execute(ctx context.Context, in CreateCompose
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, in.OrganizationID, in.RequestingUserID, permissionComposeFileManage)
 	if err != nil {
 		return nil, err
 	}
@@ -55,12 +55,13 @@ func (s *CreateComposeFileService) Execute(ctx context.Context, in CreateCompose
 }
 
 type ListComposeFilesService struct {
-	repo       ComposeFileRepository
-	membership MembershipChecker
+	repo        ComposeFileRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewListComposeFilesService(repo ComposeFileRepository, membership MembershipChecker) *ListComposeFilesService {
-	return &ListComposeFilesService{repo: repo, membership: membership}
+func NewListComposeFilesService(repo ComposeFileRepository, membership MembershipChecker, permChecker PermissionChecker) *ListComposeFilesService {
+	return &ListComposeFilesService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *ListComposeFilesService) Execute(ctx context.Context, organizationID, requestingUserID string) ([]*domain.ComposeFile, error) {
@@ -71,16 +72,24 @@ func (s *ListComposeFilesService) Execute(ctx context.Context, organizationID, r
 	if !isMember {
 		return nil, domain.ErrForbidden
 	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
+		return nil, domain.ErrForbidden
+	}
 	return s.repo.ListByOrganization(ctx, organizationID)
 }
 
 type GetComposeFileService struct {
-	repo       ComposeFileRepository
-	membership MembershipChecker
+	repo        ComposeFileRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
 }
 
-func NewGetComposeFileService(repo ComposeFileRepository, membership MembershipChecker) *GetComposeFileService {
-	return &GetComposeFileService{repo: repo, membership: membership}
+func NewGetComposeFileService(repo ComposeFileRepository, membership MembershipChecker, permChecker PermissionChecker) *GetComposeFileService {
+	return &GetComposeFileService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
 func (s *GetComposeFileService) Execute(ctx context.Context, organizationID, requestingUserID, composeFileID string) (*domain.ComposeFile, error) {
@@ -89,6 +98,13 @@ func (s *GetComposeFileService) Execute(ctx context.Context, organizationID, req
 		return nil, err
 	}
 	if !isMember {
+		return nil, domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileRead)
+	if err != nil {
+		return nil, err
+	}
+	if !allowed {
 		return nil, domain.ErrForbidden
 	}
 	return s.repo.GetByID(ctx, organizationID, composeFileID)
@@ -112,7 +128,7 @@ func (s *UpdateComposeFileContentService) Execute(ctx context.Context, organizat
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionFleetManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileManage)
 	if err != nil {
 		return err
 	}

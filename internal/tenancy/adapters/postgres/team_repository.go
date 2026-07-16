@@ -130,3 +130,38 @@ func (r *TeamRepository) GetByID(ctx context.Context, organizationID, teamID str
 
 	return &team, tx.Commit(ctx)
 }
+
+func (r *TeamRepository) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Team, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, organization_id, name, created_at FROM teams WHERE organization_id = $1 ORDER BY created_at`,
+		organizationID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var teams []*domain.Team
+	for rows.Next() {
+		var team domain.Team
+		if err := rows.Scan(&team.ID, &team.OrganizationID, &team.Name, &team.CreatedAt); err != nil {
+			return nil, err
+		}
+		teams = append(teams, &team)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return teams, tx.Commit(ctx)
+}

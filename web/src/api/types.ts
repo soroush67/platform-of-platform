@@ -105,13 +105,28 @@ export interface Member {
 
 // ---- RBAC ----
 
+// Mirrors internal/rbac/domain/role.go's AllPermissions - each Fleet
+// menu (Machines / Networks & volumes / Compose files / Operations) has
+// its own independent permission pair, same for Projects, so a custom
+// Role can grant e.g. "manage Machines" without also granting "manage
+// Operations."
 export const PERMISSIONS = [
   "organization:read",
   "organization:manage",
   "organization:delete",
+  "project:read",
+  "project:manage",
   "workspace:read",
   "workspace:manage",
   "workspace:apply",
+  "machine:read",
+  "machine:manage",
+  "network_volume:read",
+  "network_volume:manage",
+  "compose_file:read",
+  "compose_file:manage",
+  "operation:read",
+  "operation:deploy",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
