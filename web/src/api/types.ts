@@ -265,3 +265,107 @@ export interface AuditLogPage {
 export interface ListResponse<T> {
   data: T[];
 }
+
+// ---- Fleet ----
+// Mirrors internal/fleet/adapters/http's response DTOs - the docker-
+// compose fleet management context ported from compose-platform (see
+// the Fleet plan). "FleetVariable" (not "Variable" - already taken by
+// the Variables context's own workspace-scoped Variable above) is a
+// per-ComposeFile variable, a different resource entirely.
+
+export const CONNECTION_STATUSES = ["unknown", "online", "unreachable"] as const;
+export const DOCKER_STATUSES = ["unknown", "ok", "missing", "error"] as const;
+export const CREDENTIAL_TYPES = ["ssh_key", "ssh_password"] as const;
+export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
+
+export interface Machine {
+  id: string;
+  organization_id: string;
+  name: string;
+  host: string;
+  ssh_port: number;
+  ssh_user: string;
+  credential_type: CredentialType;
+  credential_mount_id: string;
+  credential_path: string;
+  deploy_base_path: string;
+  connection_status: (typeof CONNECTION_STATUSES)[number];
+  docker_status: (typeof DOCKER_STATUSES)[number];
+  last_checked_at?: string;
+  archived: boolean;
+  created_at: string;
+}
+
+export interface FleetNetwork {
+  id: string;
+  organization_id: string;
+  name: string;
+  external: boolean;
+  created_by: string;
+  created_at: string;
+}
+
+export interface FleetVolume {
+  id: string;
+  organization_id: string;
+  name: string;
+  host_path: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface ComposeFile {
+  id: string;
+  organization_id: string;
+  name: string;
+  is_global: boolean;
+  compose_content: string;
+  created_by: string;
+  created_at: string;
+}
+
+export interface VolumeAttachment {
+  volume: FleetVolume;
+  container_path: string;
+}
+
+export const VAR_TYPES = ["kv", "secret", "env", "file_template", "config_file"] as const;
+export type VarType = (typeof VAR_TYPES)[number];
+
+export interface FleetVariable {
+  id: string;
+  organization_id: string;
+  compose_file_id: string;
+  key: string;
+  var_type: VarType;
+  value?: string | null;
+  secret_ref?: SecretRef | null;
+  file_target_path?: string;
+  created_at: string;
+}
+
+export const OPERATION_TYPES = ["deploy", "up", "down", "restart", "pull", "build", "stop", "start", "remove"] as const;
+export type OperationType = (typeof OPERATION_TYPES)[number];
+
+export type OperationStatus = "queued" | "running" | "success" | "failed";
+
+export const TERMINAL_OPERATION_STATUSES: OperationStatus[] = ["success", "failed"];
+
+export function isTerminalOperationStatus(status: OperationStatus): boolean {
+  return TERMINAL_OPERATION_STATUSES.includes(status);
+}
+
+export interface Operation {
+  id: string;
+  organization_id: string;
+  compose_file_id: string;
+  machine_id: string;
+  operation_type: OperationType;
+  status: OperationStatus;
+  triggered_by: string;
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  exit_code?: number;
+  output?: string;
+}

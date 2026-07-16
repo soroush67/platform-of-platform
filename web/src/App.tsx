@@ -10,6 +10,12 @@ import { ProjectDetailPage } from "./pages/ProjectDetailPage";
 import { EnvironmentDetailPage } from "./pages/EnvironmentDetailPage";
 import { WorkspaceDetailPage } from "./pages/WorkspaceDetailPage";
 import { RunDetailPage } from "./pages/RunDetailPage";
+import { MachinesPage } from "./pages/MachinesPage";
+import { NetworksVolumesPage } from "./pages/NetworksVolumesPage";
+import { ComposeFilesPage } from "./pages/ComposeFilesPage";
+import { ComposeFileDetailPage } from "./pages/ComposeFileDetailPage";
+import { OperationsPage } from "./pages/OperationsPage";
+import { OperationDetailPage } from "./pages/OperationDetailPage";
 import { VariablesPage } from "./pages/VariablesPage";
 import { SecretMountsPage } from "./pages/SecretMountsPage";
 import { RolesPage } from "./pages/RolesPage";
@@ -54,6 +60,12 @@ export function App() {
           path="projects/:projectId/workspaces/:workspaceId/runs/:runId"
           element={<RunDetailPage />}
         />
+        <Route path="machines" element={<MachinesPage />} />
+        <Route path="networks-volumes" element={<NetworksVolumesPage />} />
+        <Route path="compose-files" element={<ComposeFilesPage />} />
+        <Route path="compose-files/:composeFileId" element={<ComposeFileDetailPage />} />
+        <Route path="operations" element={<OperationsPage />} />
+        <Route path="operations/:operationId" element={<OperationDetailPage />} />
         <Route path="variables" element={<VariablesPage />} />
         <Route path="secret-mounts" element={<SecretMountsPage />} />
         <Route path="roles" element={<RolesPage />} />

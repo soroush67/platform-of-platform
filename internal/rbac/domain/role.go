@@ -42,6 +42,17 @@ const (
 	// differentiates the two roles yet - org deletion is the one real,
 	// buildable candidate the docs themselves already named.
 	PermissionOrganizationDelete Permission = "organization:delete"
+	// PermissionFleetRead/Manage/Deploy gate the Fleet context
+	// (internal/fleet - Machines/Networks/Volumes/ComposeFiles/
+	// Operations, the ported compose-platform functionality). Deploy is
+	// kept distinct from Manage for the same reason workspace:apply is
+	// distinct from workspace:manage above - triggering a real SSH
+	// deploy against a real remote machine is a materially
+	// higher-consequence action than managing the catalog resources
+	// themselves, even though both sit at the same Write-role tier today.
+	PermissionFleetRead   Permission = "fleet:read"
+	PermissionFleetManage Permission = "fleet:manage"
+	PermissionFleetDeploy Permission = "fleet:deploy"
 )
 
 // AllPermissions is the fixed, versioned enum
@@ -57,6 +68,9 @@ var AllPermissions = map[Permission]bool{
 	PermissionWorkspaceRead:      true,
 	PermissionWorkspaceManage:    true,
 	PermissionWorkspaceApply:     true,
+	PermissionFleetRead:          true,
+	PermissionFleetManage:        true,
+	PermissionFleetDeploy:        true,
 }
 
 // Built-in role names (docs/architecture/03-domain-model.md §4's
@@ -86,10 +100,10 @@ const (
 // decision, deliberately not opened up to Write - see
 // create_project.go and create_environment.go's own comments).
 var BuiltinRoles = map[string][]Permission{
-	RoleOwner: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionOrganizationDelete, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply},
-	RoleAdmin: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply},
-	RoleWrite: {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply},
-	RoleRead:  {PermissionOrganizationRead, PermissionWorkspaceRead},
+	RoleOwner: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionOrganizationDelete, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionFleetRead, PermissionFleetManage, PermissionFleetDeploy},
+	RoleAdmin: {PermissionOrganizationRead, PermissionOrganizationManage, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionFleetRead, PermissionFleetManage, PermissionFleetDeploy},
+	RoleWrite: {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionFleetRead, PermissionFleetManage, PermissionFleetDeploy},
+	RoleRead:  {PermissionOrganizationRead, PermissionWorkspaceRead, PermissionFleetRead},
 }
 
 // Role is the RBAC aggregate root - docs/architecture/03-domain-model.md

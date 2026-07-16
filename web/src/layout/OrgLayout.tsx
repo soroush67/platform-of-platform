@@ -7,6 +7,10 @@ import { useTheme } from "../theme";
 const NAV_ITEMS = [
   { to: "", label: "Overview", end: true },
   { to: "projects", label: "Projects" },
+  { to: "machines", label: "Machines" },
+  { to: "networks-volumes", label: "Networks & volumes" },
+  { to: "compose-files", label: "Compose files" },
+  { to: "operations", label: "Operations" },
   { to: "variables", label: "Variables" },
   { to: "secret-mounts", label: "Secret mounts" },
   { to: "roles", label: "Roles" },

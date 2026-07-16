@@ -75,6 +75,17 @@ async function attemptRefresh(): Promise<boolean> {
   return true;
 }
 
+// apiFetchRaw is the SSE-consumption escape hatch (useFleet.ts's own
+// useOperationLogStream) - returns the raw Response so callers can read
+// its body as a ReadableStream, unlike apiFetch which always awaits and
+// JSON-parses the full body. Deliberately does NOT retry on 401 (a
+// streaming GET's own reconnect-with-a-fresh-token story is out of
+// scope for Phase 1 - the token used to open the stream is assumed to
+// outlive it, true for every real deploy operation's realistic runtime).
+export async function apiFetchRaw(path: string, init?: RequestInit): Promise<Response> {
+  return rawFetch(path, init);
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   let res = await rawFetch(path, init);
 
