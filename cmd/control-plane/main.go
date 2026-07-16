@@ -288,6 +288,13 @@ func main() {
 		return rbacdomain.AllPermissions[rbacdomain.Permission(scope)]
 	}))
 	revokeAPIKeyService := identityapp.NewRevokeAPIKeyService(apiKeyRepo, membershipRepo, roleBindingRepo)
+	// listMembersService's UserReader/RoleReader ports are satisfied
+	// structurally by userRepo/roleBindingRepo (internal/tenancy/
+	// application/ports.go's own dependency-inversion pattern - Tenancy
+	// declares the interfaces it needs, Identity/RBAC's real adapters
+	// happen to implement them, no explicit wiring beyond passing them
+	// in here).
+	listMembersService := tenancyapp.NewListMembersService(membershipRepo, userRepo, roleBindingRepo)
 
 	// The real API-key authentication path (docs/architecture/13-module-
 	// identity-rbac-tenancy.md §2) - httpserver.RequireAuth calls this for
@@ -325,7 +332,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
-	mux.HandleFunc("POST /api/v1/users", identityhttp.CreateUserHandler(createUserService))
+	mux.HandleFunc("POST /api/v1/users", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateUserHandler(createUserService)))
 	mux.HandleFunc("GET /api/v1/users/me", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.GetOwnUserHandler(getOwnUserService)))
 	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, loginLimiter, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))
@@ -335,6 +342,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/orgs", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateOrganizationHandler(createOrgService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.GetOrganizationHandler(getOrgService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.AddMemberHandler(addMemberService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListMembersHandler(listMembersService)))
 	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/role", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ChangeMemberRoleHandler(changeMemberRoleService)))
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ArchiveOrganizationHandler(archiveOrganizationService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/teams", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateTeamHandler(createTeamService)))

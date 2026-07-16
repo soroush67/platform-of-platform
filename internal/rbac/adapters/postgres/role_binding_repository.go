@@ -104,6 +104,47 @@ func (r *RoleBindingRepository) ReplaceRole(ctx context.Context, organizationID,
 	return tx.Commit(ctx)
 }
 
+// GetOrgScopeRoleName satisfies Tenancy's own RoleReader port
+// (internal/tenancy/application/ports.go) for the member roster
+// (ListMembersService) - same WHERE clause ReplaceRole's own DELETE
+// above uses to find "the" org-scope binding for a member, joined to
+// roles for its name. Not restricted to built-in roles only (unlike
+// AssignRole/ReplaceRole, which only ever assign one) - a member's
+// org-scope binding could in principle point at a custom role instead,
+// created via the general Role Bindings page rather than
+// ChangeMemberRoleService, and the roster should show that real name
+// too. found=false, not an error, when a member has no org-scope
+// binding at all - genuinely possible for a member added outside
+// AddMemberService's own AssignRole call.
+func (r *RoleBindingRepository) GetOrgScopeRoleName(ctx context.Context, organizationID, userID string) (string, bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return "", false, err
+	}
+
+	var roleName string
+	err = tx.QueryRow(ctx,
+		`SELECT roles.name FROM role_bindings
+		 JOIN roles ON roles.id = role_bindings.role_id
+		 WHERE role_bindings.organization_id = $1 AND role_bindings.subject_type = 'user'
+		   AND role_bindings.subject_id = $2 AND role_bindings.scope_type = 'organization' AND role_bindings.scope_id = $1`,
+		organizationID, userID,
+	).Scan(&roleName)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+
+	return roleName, true, tx.Commit(ctx)
+}
+
 // HasPermission is the actual authorization check most gated actions call
 // through (docs/architecture/03-domain-model.md §4: RBAC answers "can
 // this subject touch this resource class at all"). A thin wrapper over

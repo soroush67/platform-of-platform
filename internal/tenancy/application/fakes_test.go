@@ -11,7 +11,9 @@ package application_test
 
 import (
 	"context"
+	"sort"
 	"sync"
+	"time"
 
 	"platform-of-platform/internal/tenancy/domain"
 )
@@ -93,30 +95,103 @@ func (f *fakeRootMembershipRepo) addMembership(userID string, org *domain.Organi
 
 type fakeMembershipRepo struct {
 	mu      sync.Mutex
-	members map[string]bool // "orgID|userID" -> true
+	members map[string]*domain.OrganizationMembership // "orgID|userID" -> membership
 }
 
 func newFakeMembershipRepo() *fakeMembershipRepo {
-	return &fakeMembershipRepo{members: map[string]bool{}}
+	return &fakeMembershipRepo{members: map[string]*domain.OrganizationMembership{}}
 }
 
 func (f *fakeMembershipRepo) Create(ctx context.Context, m *domain.OrganizationMembership) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.members[m.OrganizationID+"|"+m.UserID] = true
+	cp := *m
+	f.members[m.OrganizationID+"|"+m.UserID] = &cp
 	return nil
 }
 
 func (f *fakeMembershipRepo) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.members[organizationID+"|"+userID], nil
+	_, ok := f.members[organizationID+"|"+userID]
+	return ok, nil
+}
+
+// ListByOrganization mirrors the real postgres adapter's ORDER BY
+// joined_at - sorted here explicitly since map iteration order isn't
+// stable.
+func (f *fakeMembershipRepo) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.OrganizationMembership, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result []*domain.OrganizationMembership
+	for _, m := range f.members {
+		if m.OrganizationID == organizationID {
+			result = append(result, m)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].JoinedAt.Before(result[j].JoinedAt) })
+	return result, nil
 }
 
 func (f *fakeMembershipRepo) add(orgID, userID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.members[orgID+"|"+userID] = true
+	f.members[orgID+"|"+userID] = &domain.OrganizationMembership{OrganizationID: orgID, UserID: userID, JoinedAt: time.Now()}
+}
+
+// fakeUserReader/fakeRoleReader back ListMembersService's own two new
+// cross-context ports - map-backed, same style as fakePermChecker
+// below. A userID/orgID with no entry set is exactly the real
+// found=false case (a user record or role binding that doesn't exist,
+// or was never assigned).
+type fakeUserReader struct {
+	mu    sync.Mutex
+	users map[string][2]string // userID -> [username, email]
+}
+
+func newFakeUserReader() *fakeUserReader {
+	return &fakeUserReader{users: map[string][2]string{}}
+}
+
+func (f *fakeUserReader) GetUser(ctx context.Context, userID string) (string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.users[userID]
+	if !ok {
+		return "", "", false, nil
+	}
+	return u[0], u[1], true, nil
+}
+
+func (f *fakeUserReader) set(userID, username, email string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users[userID] = [2]string{username, email}
+}
+
+type fakeRoleReader struct {
+	mu    sync.Mutex
+	roles map[string]string // "orgID|userID" -> role name
+}
+
+func newFakeRoleReader() *fakeRoleReader {
+	return &fakeRoleReader{roles: map[string]string{}}
+}
+
+func (f *fakeRoleReader) GetOrgScopeRoleName(ctx context.Context, organizationID, userID string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name, ok := f.roles[organizationID+"|"+userID]
+	if !ok {
+		return "", false, nil
+	}
+	return name, true, nil
+}
+
+func (f *fakeRoleReader) set(orgID, userID, roleName string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.roles[orgID+"|"+userID] = roleName
 }
 
 // fakePermChecker: a permission is granted per (orgID, userID) pair -

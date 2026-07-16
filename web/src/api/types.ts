@@ -86,6 +86,23 @@ export interface Project {
   created_at: string;
 }
 
+// ROLE_NAMES is the closed set ChangeMemberRoleService actually accepts
+// (internal/tenancy/application/change_member_role.go's own
+// validRoleNames) - the 4 built-in roles only, not any custom role a
+// RolesPage-created Role might have. A member's org-scope "role" (as
+// opposed to a fine-grained RoleBinding at project/workspace scope,
+// which can be any role) is always one of these.
+export const ROLE_NAMES = ["owner", "admin", "write", "read"] as const;
+export type RoleName = (typeof ROLE_NAMES)[number];
+
+export interface Member {
+  user_id: string;
+  username: string;
+  email: string;
+  role_name: string;
+  joined_at: string;
+}
+
 // ---- RBAC ----
 
 export const PERMISSIONS = [
@@ -130,10 +147,8 @@ export interface Environment {
 }
 
 // EXECUTION_ENGINES mirrors internal/workspace/domain's closed
-// ExecutionEngine enum (8 values) - only "compose" and "terraform" have
-// a real Worker-side implementation (internal/worker/engine) today; the
-// other six are accepted at Workspace-creation time but a Run against
-// them will never find a matching Worker.
+// ExecutionEngine enum (8 values) - all 8 have a real Worker-side
+// implementation now (internal/worker/engine).
 export const EXECUTION_ENGINES = [
   "compose",
   "terraform",

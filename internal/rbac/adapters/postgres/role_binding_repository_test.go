@@ -92,6 +92,55 @@ func TestRoleBindingRepository_ReplaceRole_ReplacesNotAdds(t *testing.T) {
 	}
 }
 
+// TestRoleBindingRepository_GetOrgScopeRoleName proves the query
+// GetOrgScopeRoleName runs (satisfying Tenancy's own RoleReader port
+// for the member roster) actually tracks reality through an unbound ->
+// bound -> replaced lifecycle, not just that it parses.
+func TestRoleBindingRepository_GetOrgScopeRoleName(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	roleRepo := rbacpg.NewRoleRepository(pool)
+	repo := rbacpg.NewRoleBindingRepository(pool)
+	orgID := insertOrg(t, root)
+	userID := insertUser(t, root)
+
+	if err := roleRepo.SeedBuiltinRoles(ctx); err != nil {
+		t.Fatalf("SeedBuiltinRoles: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM role_bindings WHERE organization_id = $1`, orgID) })
+
+	_, found, err := repo.GetOrgScopeRoleName(ctx, orgID, userID)
+	if err != nil {
+		t.Fatalf("GetOrgScopeRoleName (before any binding): %v", err)
+	}
+	if found {
+		t.Error("expected found=false before any org-scope binding exists")
+	}
+
+	if err := repo.AssignRole(ctx, orgID, userID, domain.RoleRead); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	name, found, err := repo.GetOrgScopeRoleName(ctx, orgID, userID)
+	if err != nil {
+		t.Fatalf("GetOrgScopeRoleName (after AssignRole): %v", err)
+	}
+	if !found || name != domain.RoleRead {
+		t.Errorf("expected found=true name=%q, got found=%v name=%q", domain.RoleRead, found, name)
+	}
+
+	if err := repo.ReplaceRole(ctx, orgID, userID, domain.RoleWrite); err != nil {
+		t.Fatalf("ReplaceRole: %v", err)
+	}
+	name, found, err = repo.GetOrgScopeRoleName(ctx, orgID, userID)
+	if err != nil {
+		t.Fatalf("GetOrgScopeRoleName (after ReplaceRole): %v", err)
+	}
+	if !found || name != domain.RoleWrite {
+		t.Errorf("expected the replaced role %q to be reflected, got found=%v name=%q", domain.RoleWrite, found, name)
+	}
+}
+
 func TestRoleBindingRepository_HasPermissionAtScope_ProjectScopeGrant(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.AppPool(t)

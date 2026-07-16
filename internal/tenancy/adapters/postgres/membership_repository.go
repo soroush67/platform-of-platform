@@ -81,3 +81,41 @@ func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, sub
 
 	return exists, tx.Commit(ctx)
 }
+
+// ListByOrganization backs the member roster (ListMembersService,
+// internal/tenancy/application) - same transaction/query shape as
+// ProjectRepository.ListByOrganization.
+func (r *MembershipRepository) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.OrganizationMembership, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT id, organization_id, user_id, joined_at FROM organization_memberships WHERE organization_id = $1 ORDER BY joined_at`,
+		organizationID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var memberships []*domain.OrganizationMembership
+	for rows.Next() {
+		m := &domain.OrganizationMembership{}
+		if err := rows.Scan(&m.ID, &m.OrganizationID, &m.UserID, &m.JoinedAt); err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return memberships, tx.Commit(ctx)
+}

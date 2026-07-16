@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
-import type { ListResponse, Organization, Project, Team } from "../types";
+import type { ListResponse, Member, Organization, Project, Team } from "../types";
 
 export function useOrganizations() {
   return useQuery({
@@ -38,17 +38,29 @@ export function useArchiveOrganization(orgId: string) {
   });
 }
 
+export function useMembers(orgId: string) {
+  return useQuery({
+    queryKey: ["orgs", orgId, "members"],
+    queryFn: () => apiFetch<ListResponse<Member>>(`/orgs/${orgId}/members`),
+    enabled: !!orgId,
+  });
+}
+
 export function useAddMember(orgId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) =>
       apiFetch<void>(`/orgs/${orgId}/members`, { method: "POST", body: JSON.stringify({ user_id: userId }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
   });
 }
 
 export function useChangeMemberRole(orgId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
       apiFetch<void>(`/orgs/${orgId}/members/${userId}/role`, { method: "PUT", body: JSON.stringify({ role }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
   });
 }
 

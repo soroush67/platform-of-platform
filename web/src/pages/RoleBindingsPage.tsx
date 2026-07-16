@@ -115,7 +115,6 @@ export function RoleBindingsPage() {
                 <option value="organization">organization</option>
                 <option value="project">project</option>
                 <option value="workspace">workspace</option>
-                <option value="team">team</option>
               </select>
             </label>
             {scopeType !== "organization" && (

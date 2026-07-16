@@ -6,8 +6,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"sync"
 	"testing"
+	"time"
 
 	"platform-of-platform/internal/tenancy/domain"
 
@@ -117,30 +119,98 @@ func (f *fakeRootMembershipRepo) addMembership(userID string, org *domain.Organi
 
 type fakeMembershipRepo struct {
 	mu      sync.Mutex
-	members map[string]bool
+	members map[string]*domain.OrganizationMembership
 }
 
 func newFakeMembershipRepo() *fakeMembershipRepo {
-	return &fakeMembershipRepo{members: map[string]bool{}}
+	return &fakeMembershipRepo{members: map[string]*domain.OrganizationMembership{}}
 }
 
 func (f *fakeMembershipRepo) Create(ctx context.Context, m *domain.OrganizationMembership) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.members[m.OrganizationID+"|"+m.UserID] = true
+	cp := *m
+	f.members[m.OrganizationID+"|"+m.UserID] = &cp
 	return nil
 }
 
 func (f *fakeMembershipRepo) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.members[organizationID+"|"+userID], nil
+	_, ok := f.members[organizationID+"|"+userID]
+	return ok, nil
+}
+
+func (f *fakeMembershipRepo) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.OrganizationMembership, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result []*domain.OrganizationMembership
+	for _, m := range f.members {
+		if m.OrganizationID == organizationID {
+			result = append(result, m)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].JoinedAt.Before(result[j].JoinedAt) })
+	return result, nil
 }
 
 func (f *fakeMembershipRepo) add(orgID, userID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.members[orgID+"|"+userID] = true
+	f.members[orgID+"|"+userID] = &domain.OrganizationMembership{OrganizationID: orgID, UserID: userID, JoinedAt: time.Now()}
+}
+
+// fakeUserReader/fakeRoleReader back ListMembersHandler's own
+// ListMembersService dependencies - same map-backed style as this
+// file's other fakes.
+type fakeUserReader struct {
+	mu    sync.Mutex
+	users map[string][2]string
+}
+
+func newFakeUserReader() *fakeUserReader {
+	return &fakeUserReader{users: map[string][2]string{}}
+}
+
+func (f *fakeUserReader) GetUser(ctx context.Context, userID string) (string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.users[userID]
+	if !ok {
+		return "", "", false, nil
+	}
+	return u[0], u[1], true, nil
+}
+
+func (f *fakeUserReader) set(userID, username, email string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users[userID] = [2]string{username, email}
+}
+
+type fakeRoleReader struct {
+	mu    sync.Mutex
+	roles map[string]string
+}
+
+func newFakeRoleReader() *fakeRoleReader {
+	return &fakeRoleReader{roles: map[string]string{}}
+}
+
+func (f *fakeRoleReader) GetOrgScopeRoleName(ctx context.Context, organizationID, userID string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name, ok := f.roles[organizationID+"|"+userID]
+	if !ok {
+		return "", false, nil
+	}
+	return name, true, nil
+}
+
+func (f *fakeRoleReader) set(orgID, userID, roleName string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.roles[orgID+"|"+userID] = roleName
 }
 
 type fakeRoleAssigner struct{}

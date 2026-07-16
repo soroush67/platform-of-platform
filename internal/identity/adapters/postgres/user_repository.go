@@ -89,6 +89,25 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 	return &user, nil
 }
 
+// GetUser is a thin sibling of GetByID, returned as primitives rather
+// than *domain.User - it's what satisfies Tenancy's own UserReader port
+// (internal/tenancy/application/ports.go) for the member roster
+// (ListMembersService), which can't accept an identity/domain.User
+// without importing this context's domain package (the same
+// dependency-inversion reasoning RoleAssigner's own doc comment gives).
+// found=false, not an error, on no row - a roster resolving one member's
+// user record that's since been deleted shouldn't fail the whole list.
+func (r *UserRepository) GetUser(ctx context.Context, id string) (username, email string, found bool, err error) {
+	err = r.pool.QueryRow(ctx, `SELECT username, email FROM users WHERE id = $1`, id).Scan(&username, &email)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	return username, email, true, nil
+}
+
 // UpdatePasswordHash is PasswordResetService's own write - the only
 // place in this codebase that changes an existing User's credential
 // after creation.

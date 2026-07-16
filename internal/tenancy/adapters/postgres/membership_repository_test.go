@@ -70,6 +70,72 @@ func TestMembershipRepository_CreateAndIsMember(t *testing.T) {
 	}
 }
 
+// TestMembershipRepository_ListByOrganization_ScopedAndOrdered proves
+// two things ListMembersService (internal/tenancy/application) depends
+// on: the query is genuinely scoped to organizationID (a member of a
+// different org never leaks in), and rows come back ordered by
+// joined_at, oldest first - the roster shouldn't reorder itself on
+// every request just because Go map iteration is unordered.
+func TestMembershipRepository_ListByOrganization_ScopedAndOrdered(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	orgRepo := tenancypg.NewOrganizationRepository(pool)
+	membershipRepo := tenancypg.NewMembershipRepository(pool)
+
+	actorID := insertUser(t, root)
+	firstMemberID := insertUser(t, root)
+	secondMemberID := insertUser(t, root)
+	otherOrgMemberID := insertUser(t, root)
+
+	org, _ := domain.NewOrganization("Roster Test Org", "roster-org-"+uuid.NewString()[:8])
+	if err := orgRepo.Create(ctx, org, actorID); err != nil {
+		t.Fatalf("Create org: %v", err)
+	}
+	otherOrg, _ := domain.NewOrganization("Other Roster Org", "roster-org-other-"+uuid.NewString()[:8])
+	if err := orgRepo.Create(ctx, otherOrg, actorID); err != nil {
+		t.Fatalf("Create other org: %v", err)
+	}
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id IN ($1, $2)`, org.ID, otherOrg.ID)
+		mustExec(t, root, `DELETE FROM organization_memberships WHERE organization_id IN ($1, $2)`, org.ID, otherOrg.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
+		dbtest.DeleteOrganization(t, root, otherOrg.ID)
+	})
+
+	// orgRepo.Create alone (unlike the CreateOrganizationService use case
+	// one layer up) does NOT create a membership row for the actor -
+	// only the two explicit Create calls below produce members here.
+	first := domain.NewOrganizationMembership(org.ID, firstMemberID)
+	if err := membershipRepo.Create(ctx, first); err != nil {
+		t.Fatalf("Create first: %v", err)
+	}
+	second := domain.NewOrganizationMembership(org.ID, secondMemberID)
+	if err := membershipRepo.Create(ctx, second); err != nil {
+		t.Fatalf("Create second: %v", err)
+	}
+	otherOrgMember := domain.NewOrganizationMembership(otherOrg.ID, otherOrgMemberID)
+	if err := membershipRepo.Create(ctx, otherOrgMember); err != nil {
+		t.Fatalf("Create otherOrgMember: %v", err)
+	}
+
+	got, err := membershipRepo.ListByOrganization(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrganization: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected exactly 2 members (first + second), got %d: %+v", len(got), got)
+	}
+	for _, m := range got {
+		if m.UserID == otherOrgMemberID {
+			t.Fatalf("expected the other org's member to never appear, got %+v", got)
+		}
+	}
+	if got[0].UserID != firstMemberID || got[1].UserID != secondMemberID {
+		t.Errorf("expected first then second in joined_at order, got %+v", got)
+	}
+}
+
 // TestMembershipRepository_IsMember_RecognizesServiceAccounts is the
 // regression test for IsMember's own doc comment: a ServiceAccount has
 // no organization_memberships row (it's scoped directly by its own

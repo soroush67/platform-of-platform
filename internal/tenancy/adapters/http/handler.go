@@ -189,6 +189,58 @@ func ChangeMemberRoleHandler(svc *application.ChangeMemberRoleService) http.Hand
 	}
 }
 
+type memberResponse struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	RoleName string `json:"role_name"`
+	JoinedAt string `json:"joined_at"`
+}
+
+func toMemberResponse(m application.MemberSummary) memberResponse {
+	return memberResponse{
+		UserID:   m.UserID,
+		Username: m.Username,
+		Email:    m.Email,
+		RoleName: m.RoleName,
+		JoinedAt: m.JoinedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+// ListMembersHandler implements GET /api/v1/orgs/{id}/members -
+// membership-gated only, same "any member can see the roster" posture
+// as ListProjectsHandler.
+func ListMembersHandler(svc *application.ListMembersService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		orgID := r.PathValue("id")
+
+		members, err := svc.Execute(r.Context(), orgID, userID)
+		if err != nil {
+			if errors.Is(err, domain.ErrOrganizationNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "organization not found", "")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to list members", "")
+			return
+		}
+
+		responses := make([]memberResponse, 0, len(members))
+		for _, m := range members {
+			responses = append(responses, toMemberResponse(m))
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+	}
+}
+
 func toOrganizationResponse(org *domain.Organization) organizationResponse {
 	return organizationResponse{
 		ID:        org.ID,

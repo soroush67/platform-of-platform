@@ -88,6 +88,39 @@ func TestUserRepository_GetByIDAndGetByEmail(t *testing.T) {
 	}
 }
 
+// TestUserRepository_GetUser proves GetUser (the primitives-only sibling
+// of GetByID that satisfies Tenancy's own UserReader port for the
+// member roster) round-trips real data and reports found=false, not an
+// error, for an unknown id.
+func TestUserRepository_GetUser(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	repo := postgres.NewUserRepository(pool)
+
+	u := mustLocalUser(t)
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM users WHERE id = $1`, u.ID) })
+
+	username, email, found, err := repo.GetUser(ctx, u.ID)
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if !found || username != u.Username || email != u.Email {
+		t.Errorf("expected found=true with username=%q email=%q, got found=%v username=%q email=%q", u.Username, u.Email, found, username, email)
+	}
+
+	_, _, found, err = repo.GetUser(ctx, uuid.NewString())
+	if err != nil {
+		t.Fatalf("GetUser (unknown id): %v", err)
+	}
+	if found {
+		t.Error("expected found=false for an unknown user id, not an error")
+	}
+}
+
 func TestUserRepository_UpdatePasswordHash(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.AppPool(t)

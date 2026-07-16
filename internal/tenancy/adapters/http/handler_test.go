@@ -158,6 +158,65 @@ func TestChangeMemberRoleHandler_InvalidRoleNameMapsTo400(t *testing.T) {
 	}
 }
 
+func TestListMembersHandler_Succeeds(t *testing.T) {
+	membershipRepo := newFakeMembershipRepo()
+	membershipRepo.add("org-1", "user-1")
+	userReader := newFakeUserReader()
+	userReader.set("user-1", "alice", "alice@example.com")
+	roleReader := newFakeRoleReader()
+	roleReader.set("org-1", "user-1", "owner")
+	svc := application.NewListMembersService(membershipRepo, userReader, roleReader)
+	handler := withAuth(httpadapter.ListMembersHandler(svc))
+
+	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/members", "user-1", nil)
+	req.SetPathValue("id", "org-1")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Data) != 1 || body.Data[0]["username"] != "alice" || body.Data[0]["role_name"] != "owner" {
+		t.Fatalf("expected exactly one roster row for alice/owner, got %+v", body.Data)
+	}
+}
+
+func TestListMembersHandler_NonMemberGetsNotFound(t *testing.T) {
+	membershipRepo := newFakeMembershipRepo()
+	membershipRepo.add("org-1", "user-1")
+	svc := application.NewListMembersService(membershipRepo, newFakeUserReader(), newFakeRoleReader())
+	handler := withAuth(httpadapter.ListMembersHandler(svc))
+
+	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/members", "not-a-member", nil)
+	req.SetPathValue("id", "org-1")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 404 {
+		t.Fatalf("expected 404 for a non-member requester, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListMembersHandler_RequiresAuth(t *testing.T) {
+	svc := application.NewListMembersService(newFakeMembershipRepo(), newFakeUserReader(), newFakeRoleReader())
+	handler := httpadapter.ListMembersHandler(svc)
+
+	req := httptest.NewRequest("GET", "/api/v1/orgs/org-1/members", nil)
+	req.SetPathValue("id", "org-1")
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 401 {
+		t.Fatalf("expected 401 with no auth context, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestArchiveOrganizationHandler_ForbiddenWithoutPermission(t *testing.T) {
 	orgRepo := newFakeOrgRepo()
 	org, _ := domain.NewOrganization("Acme", "acme")

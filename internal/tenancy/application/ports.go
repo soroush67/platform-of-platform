@@ -38,6 +38,33 @@ type MembershipRepository interface {
 	// own comment documents - is trivially satisfiable by anyone who
 	// knows the id) but "is *this specific* user allowed to see it."
 	IsMember(ctx context.Context, organizationID, userID string) (bool, error)
+	// ListByOrganization backs the member roster (ListMembersService) -
+	// same shape/reasoning as ProjectRepository.ListByOrganization below.
+	ListByOrganization(ctx context.Context, organizationID string) ([]*domain.OrganizationMembership, error)
+}
+
+// UserReader and RoleReader are Tenancy's own ports into Identity and
+// RBAC respectively, both shaped like RoleAssigner/RoleChanger below -
+// primitive-only signatures, not a shared struct, so neither adapter
+// package needs to import tenancy/application to construct one (the
+// same dependency-inversion reasoning RoleAssigner's own doc comment
+// gives). ListMembersService resolves each roster row's username/email
+// and current org-scope role one call at a time (no bulk/batched
+// cross-context port exists anywhere in this codebase yet) - org
+// rosters aren't expected to be large enough for the N+1 shape to
+// matter; a real, honest cost of staying consistent with the existing
+// pattern rather than inventing a new one.
+type UserReader interface {
+	GetUser(ctx context.Context, userID string) (username, email string, found bool, err error)
+}
+
+// RoleReader.GetOrgScopeRoleName mirrors RoleChanger.ReplaceRole's own
+// "there is exactly one org-scope role_binding per member" reasoning -
+// found=false (not an error) when a member has none, which can
+// genuinely happen for a member added outside AddMemberService's own
+// AssignRole call.
+type RoleReader interface {
+	GetOrgScopeRoleName(ctx context.Context, organizationID, userID string) (roleName string, found bool, err error)
 }
 
 // RoleAssigner and PermissionChecker are Tenancy's own ports into the
