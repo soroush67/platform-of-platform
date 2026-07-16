@@ -1,14 +1,17 @@
 # Worker image - the one that actually bundles engine tooling
-# (docs/architecture/21-deployment.md §1). Five real engines now (see
+# (docs/architecture/21-deployment.md §1). All 8 real engines now (see
 # cmd/worker/main.go's own comment): compose (docker.io + docker-compose -
 # docker.io alone doesn't ship the `docker compose` plugin subcommand in
 # this base image, the classic hyphenated docker-compose binary is what's
 # actually available and used), terraform + opentofu + packer (installed
 # below, real checksum-verified binaries per docs/architecture/
 # 21-deployment.md's own "fetched and verified once with real internet
-# access" commitment for Worker plugin binaries), and ansible (installed
+# access" commitment for Worker plugin binaries), ansible (installed
 # via a dedicated pip venv, not Debian's own stale `ansible` apt package -
-# see below).
+# see below), kubectl + helm + helmfile (checksum-verified binaries, same
+# posture as terraform/opentofu/packer), and kubespray (a real clone of
+# github.com/kubernetes-sigs/kubespray at a pinned tag, its own dedicated
+# pip venv - see below for why it can't share ansible-venv).
 FROM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -18,7 +21,7 @@ RUN CGO_ENABLED=0 go build -buildvcs=false -o /out/worker ./cmd/worker
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        docker.io docker-compose ca-certificates curl unzip python3 python3-venv \
+        docker.io docker-compose ca-certificates curl unzip git python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Terraform >=1.6 is BSL 1.1, not MPL - a real, deliberate choice (not an
@@ -38,6 +41,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG TERRAFORM_VERSION=1.15.8
 ARG OPENTOFU_VERSION=1.12.4
 ARG PACKER_VERSION=1.15.4
+# kubectl/Helm/Helmfile versions, same "checked live, current stable"
+# discipline as the three above.
+ARG KUBECTL_VERSION=1.36.2
+ARG HELM_VERSION=4.2.3
+ARG HELMFILE_VERSION=1.7.0
 
 # Downloaded filenames deliberately match each project's own SHA256SUMS
 # filename column exactly (e.g. terraform_<version>_linux_amd64.zip, not
@@ -81,6 +89,51 @@ RUN cd /tmp \
     && cp packer /usr/local/bin/packer && chmod +x /usr/local/bin/packer \
     && cd /tmp && rm -rf packer-extract
 
+# kubectl is a single flat binary (no zip, no LICENSE/README collision
+# risk the way Terraform/OpenTofu/Packer/Helm have) - no throwaway
+# extraction subdir needed. Its checksum companion also has a genuinely
+# different shape than the HashiCorp tools above: dl.k8s.io's own
+# `kubectl.sha256` is a bare hex digest with no filename inside it (the
+# HashiCorp `grep NAME SHA256SUMS | sha256sum -c -` pattern doesn't
+# apply here), so the filename has to be supplied on the `sha256sum -c`
+# input line itself - confirmed against kubespray's own official
+# Dockerfile, which verifies kubectl exactly this way.
+RUN cd /tmp \
+    && curl -fsSL -o kubectl "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && curl -fsSL -o kubectl.sha256 "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" \
+    && echo "$(cat kubectl.sha256)  kubectl" | sha256sum -c - \
+    && cp kubectl /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl \
+    && rm -f kubectl kubectl.sha256
+
+# Helm ships as a tar.gz containing linux-amd64/{helm,LICENSE,README.md}
+# - DOES need its own throwaway extraction subdir, same LICENSE/README
+# collision risk as Terraform/OpenTofu/Packer above. Checksum companion
+# is a `grep`-then-`sha256sum -c` shape again, closer to the HashiCorp
+# tools than to kubectl's bare-digest file.
+RUN cd /tmp \
+    && mkdir helm-extract && cd helm-extract \
+    && curl -fsSL -O "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
+    && curl -fsSL -o helm.sha256sum "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz.sha256sum" \
+    && sha256sum -c helm.sha256sum \
+    && tar -xzf "helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
+    && cp linux-amd64/helm /usr/local/bin/helm && chmod +x /usr/local/bin/helm \
+    && cd /tmp && rm -rf helm-extract
+
+# Helmfile - internal/worker/engine/helm.go's own doc comment explains
+# why: a real Helm chart is a directory, not a single ConfigBundle
+# string, so Helmfile's own real YAML schema (chart+release+namespace+
+# values in one file) is what ConfigBundle's content actually is, with
+# zero Go-side parsing. Goreleaser-published tar.gz + versioned
+# checksums.txt, same grep-then-verify shape as Terraform/Packer.
+RUN cd /tmp \
+    && mkdir helmfile-extract && cd helmfile-extract \
+    && curl -fsSL -O "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz" \
+    && curl -fsSL -O "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_checksums.txt" \
+    && grep "helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz" "helmfile_${HELMFILE_VERSION}_checksums.txt" | sha256sum -c - \
+    && tar -xzf "helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz" \
+    && cp helmfile /usr/local/bin/helmfile && chmod +x /usr/local/bin/helmfile \
+    && cd /tmp && rm -rf helmfile-extract
+
 # Ansible via a dedicated pip venv, not Debian's own `ansible` apt
 # package - real, deliberate choice: bookworm's `ansible` is 7.7.0
 # (~ansible-core 2.14, from 2023), meaningfully behind current stable
@@ -98,6 +151,40 @@ RUN cd /tmp \
 RUN python3 -m venv /opt/ansible-venv \
     && /opt/ansible-venv/bin/pip install --quiet --no-cache-dir ansible-core==2.19.11
 ENV PATH="/opt/ansible-venv/bin:${PATH}"
+
+# Kubespray (github.com/kubernetes-sigs/kubespray) - a real clone at a
+# pinned release tag, not a hypothetical/vendored copy, checked live
+# against its own release feed same as every other tool here.
+ARG KUBESPRAY_VERSION=2.31.0
+RUN git clone --branch "v${KUBESPRAY_VERSION}" --depth 1 https://github.com/kubernetes-sigs/kubespray /opt/kubespray
+
+# A dedicated venv, NOT a reuse of /opt/ansible-venv above - checked for
+# real, not assumed: Kubespray's own requirements.txt pins `ansible==
+# 11.13.0` (the full "ansible" community bundle package, not bare
+# ansible-core - confirmed by reading it directly from the v2.31.0 tag),
+# a materially different and larger package than the ansible-core
+# 2.19.11 already installed for AnsibleEngine. Installing both into one
+# venv would make pip either downgrade ansible-core to whatever
+# ansible==11.13.0 depends on (silently changing what AnsibleEngine
+# actually runs) or fail outright on the conflicting pin - a dedicated
+# venv avoids both. This also means both venvs end up with a same-named
+# `ansible-playbook` binary; KubesprayEngine (internal/worker/engine/
+# kubespray.go) deliberately calls this venv's copy by absolute path
+# rather than relying on $PATH order to keep the two apart.
+#
+# No separate `ansible-galaxy collection install` step: Kubespray ships
+# no requirements.yml (confirmed against the v2.31.0 tag - only a bare
+# requirements.txt exists). Its own official Dockerfile (kubespray's
+# repo root, same tag) confirms this too - just `pip install -r
+# requirements.txt`, nothing else. That's because requirements.txt
+# installs the FULL "ansible" bundle, not bare ansible-core, and that
+# bundle already includes every Galaxy collection galaxy.yml's own
+# `dependencies` field names (community.general, community.crypto,
+# ansible.utils, ansible.netcommon, ansible.posix, community.docker,
+# kubernetes.core) - installing the bundle IS how those collections get
+# there, not a separate step.
+RUN python3 -m venv /opt/kubespray-venv \
+    && /opt/kubespray-venv/bin/pip install --quiet --no-cache-dir -r /opt/kubespray/requirements.txt
 
 # packer plugins install into the packer home dir at `packer init` time
 # (internal/worker/engine/packer.go), not at image-build time - the

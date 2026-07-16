@@ -142,7 +142,7 @@ func (r *Registry) deregister(workerID string) {
 // double-dispatch if two replicas race on the same retry. A real,
 // working emergent property of the existing design, not something this
 // method needs to reimplement.
-func (r *Registry) Dispatch(ctx context.Context, runID, organizationID, workspaceID, executionEngine, configBundle string) (bool, error) {
+func (r *Registry) Dispatch(ctx context.Context, runID, organizationID, workspaceID, executionEngine, configBundle, credentialBundle string) (bool, error) {
 	r.mu.Lock()
 	var matchedWorkerID string
 	for workerID, w := range r.workers {
@@ -151,11 +151,12 @@ func (r *Registry) Dispatch(ctx context.Context, runID, organizationID, workspac
 		}
 		cmd := &pb.WorkerCommand{Command: &pb.WorkerCommand_JobAssignment{
 			JobAssignment: &pb.JobAssignment{
-				RunId:           runID,
-				OrganizationId:  organizationID,
-				WorkspaceId:     workspaceID,
-				ExecutionEngine: executionEngine,
-				ConfigBundle:    configBundle,
+				RunId:            runID,
+				OrganizationId:   organizationID,
+				WorkspaceId:      workspaceID,
+				ExecutionEngine:  executionEngine,
+				ConfigBundle:     configBundle,
+				CredentialBundle: credentialBundle,
 			},
 		}}
 		select {

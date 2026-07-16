@@ -15,16 +15,36 @@ import (
 // upload flow this codebase doesn't have) - a real, named stand-in for
 // the "config_bundle" a real GitOps checkout would supply, one key per
 // engine since a Terraform config and a Compose file are never the same
-// Variable. An ExecutionEngine enum value with no entry here (the
-// remaining three: helm, kubespray, kubernetes) is handled the same way
-// a genuinely-missing Variable is below - there's no Worker-side engine
-// for it yet regardless of what a Variable might contain.
+// Variable. All 8 ExecutionEngine enum values are mapped now - every
+// engine has a real Worker-side implementation.
 var configVariableKeyByEngine = map[string]string{
-	"compose":   "compose_file",
-	"terraform": "terraform_config",
-	"opentofu":  "opentofu_config",
-	"ansible":   "ansible_playbook",
-	"packer":    "packer_template",
+	"compose":    "compose_file",
+	"terraform":  "terraform_config",
+	"opentofu":   "opentofu_config",
+	"ansible":    "ansible_playbook",
+	"packer":     "packer_template",
+	"kubernetes": "kubernetes_manifest",
+	"helm":       "helm_helmfile",
+	"kubespray":  "kubespray_inventory",
+}
+
+// credentialVariableKeyByEngine is config_bundle's own pattern applied
+// to a *second*, credential-carrying Variable - only kubernetes/helm
+// (a kubeconfig) and kubespray (an SSH private key) need one. The other
+// 5 engines have no entry here, matching TerraformEngine's own already-
+// documented "no cloud credentials, JobAssignment carries none to
+// inject" reduction: compose/terraform/opentofu/ansible/packer all
+// either need no external target at all, or reach one (Docker) through
+// docker-socket-proxy, a Worker-wide connection, not a per-Workspace
+// credential. Deliberately per-workspace, not one shared static
+// credential for every Kubernetes/Helm/Kubespray Workspace (an
+// operator-confirmed, real design choice) - reuses the same live
+// Variables/Vault resolution path config_bundle already proved out
+// rather than inventing new plumbing.
+var credentialVariableKeyByEngine = map[string]string{
+	"kubernetes": "kubernetes_kubeconfig",
+	"helm":       "helm_kubeconfig",
+	"kubespray":  "kubespray_ssh_key",
 }
 
 // RunDispatchService.HandleEvent implements outbox.Handler - subscribes
@@ -112,7 +132,26 @@ func (s *RunDispatchService) HandleEvent(ctx context.Context, event outbox.Event
 		return s.fail(ctx, run, workspaceID)
 	}
 
-	dispatched, err := s.dispatcher.Dispatch(ctx, runID, organizationID, workspaceID, engine, configBundle)
+	// credentialBundle stays "" for the 5 engines with no
+	// credentialVariableKeyByEngine entry - Dispatch/JobAssignment
+	// already treat an empty credential_bundle as "this engine needs
+	// none" (see that field's own doc comment in worker.proto). A
+	// missing credential Variable for an engine that DOES need one is
+	// the same non-transient failure a missing config Variable already
+	// is above - real operator misconfiguration, not something a retry
+	// would ever fix.
+	var credentialBundle string
+	if credentialVariableKey, needsCredential := credentialVariableKeyByEngine[engine]; needsCredential {
+		credentialBundle, found, err = s.variableResolver.ResolveValue(ctx, organizationID, workspaceID, credentialVariableKey, run.TriggeredBy)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return s.fail(ctx, run, workspaceID)
+		}
+	}
+
+	dispatched, err := s.dispatcher.Dispatch(ctx, runID, organizationID, workspaceID, engine, configBundle, credentialBundle)
 	if err != nil {
 		return err
 	}

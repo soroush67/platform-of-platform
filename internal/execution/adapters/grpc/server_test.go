@@ -81,7 +81,7 @@ func TestServer_Register_Succeeds(t *testing.T) {
 	// Registered workers are only observable through Registry's own
 	// exported behavior (Dispatch) - a real end-to-end confirmation that
 	// this RPC actually reached the Registry, not just returned success.
-	dispatched, err := registry.Dispatch(context.Background(), uuid.NewString(), "org-1", "ws-1", "compose", "bundle")
+	dispatched, err := registry.Dispatch(context.Background(), uuid.NewString(), "org-1", "ws-1", "compose", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestServer_StreamJobs_DeliversDispatchedJobsAndDeregistersOnDisconnect(t *t
 	go func() { streamDone <- server.StreamJobs(&pb.StreamJobsRequest{WorkerId: "worker-1"}, stream) }()
 
 	runID := uuid.NewString()
-	dispatched, err := registry.Dispatch(context.Background(), runID, "org-1", "ws-1", "compose", "bundle")
+	dispatched, err := registry.Dispatch(context.Background(), runID, "org-1", "ws-1", "compose", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestServer_StreamJobs_DeliversDispatchedJobsAndDeregistersOnDisconnect(t *t
 
 	// The real proof deregister() ran: a fresh Dispatch for worker-1's
 	// engine must no longer find it.
-	dispatched, err = registry.Dispatch(context.Background(), uuid.NewString(), "org-1", "ws-1", "compose", "bundle")
+	dispatched, err = registry.Dispatch(context.Background(), uuid.NewString(), "org-1", "ws-1", "compose", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch (after disconnect): %v", err)
 	}

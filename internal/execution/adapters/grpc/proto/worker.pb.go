@@ -341,9 +341,19 @@ type JobAssignment struct {
 	// a fabricated bypass - the GitOps context that would normally supply
 	// this (a real repo checkout) doesn't exist in this codebase yet,
 	// documented as a real, later integration point.
-	ConfigBundle  string `protobuf:"bytes,5,opt,name=config_bundle,json=configBundle,proto3" json:"config_bundle,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ConfigBundle string `protobuf:"bytes,5,opt,name=config_bundle,json=configBundle,proto3" json:"config_bundle,omitempty"`
+	// credential_bundle is real per-workspace credential material (a
+	// kubeconfig, an SSH private key) - resolved from a second,
+	// engine-specific Variable the same live way config_bundle is
+	// (credentialVariableKeyByEngine, dispatch_run.go). Only
+	// kubernetes/helm/kubespray Jobs carry a non-empty value here; every
+	// other engine's Jobs leave it unset since they have no
+	// credentialVariableKeyByEngine entry - matches TerraformEngine's own
+	// already-documented "no cloud credentials, JobAssignment carries
+	// none to inject" reduction for engines that don't need one.
+	CredentialBundle string `protobuf:"bytes,6,opt,name=credential_bundle,json=credentialBundle,proto3" json:"credential_bundle,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *JobAssignment) Reset() {
@@ -407,6 +417,13 @@ func (x *JobAssignment) GetExecutionEngine() string {
 func (x *JobAssignment) GetConfigBundle() string {
 	if x != nil {
 		return x.ConfigBundle
+	}
+	return ""
+}
+
+func (x *JobAssignment) GetCredentialBundle() string {
+	if x != nil {
+		return x.CredentialBundle
 	}
 	return ""
 }
@@ -574,13 +591,14 @@ const file_internal_execution_adapters_grpc_proto_worker_proto_rawDesc = "" +
 	"cancel_job\x18\x02 \x01(\v2\x11.worker.CancelJobH\x00R\tcancelJobB\t\n" +
 	"\acommand\"\"\n" +
 	"\tCancelJob\x12\x15\n" +
-	"\x06run_id\x18\x01 \x01(\tR\x05runId\"\xc2\x01\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"\xef\x01\n" +
 	"\rJobAssignment\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12!\n" +
 	"\fworkspace_id\x18\x03 \x01(\tR\vworkspaceId\x12)\n" +
 	"\x10execution_engine\x18\x04 \x01(\tR\x0fexecutionEngine\x12#\n" +
-	"\rconfig_bundle\x18\x05 \x01(\tR\fconfigBundle\"\xcc\x01\n" +
+	"\rconfig_bundle\x18\x05 \x01(\tR\fconfigBundle\x12+\n" +
+	"\x11credential_bundle\x18\x06 \x01(\tR\x10credentialBundle\"\xcc\x01\n" +
 	"\x0fJobStatusReport\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12!\n" +

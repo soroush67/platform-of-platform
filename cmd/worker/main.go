@@ -1,16 +1,26 @@
 // The Worker binary (docs/architecture/17-workers.md §1) - maintains
 // the long-lived gRPC connection to the Control Plane and, for each
 // JobAssignment it receives, actually runs the work via one of
-// internal/worker/engine's real Engine implementations. Five real
-// engines exist now: "compose" (docker compose up/down, reusing the
-// same DooD pattern this operator's own compose-platform project already
-// proved this session), "terraform"/"opentofu" (single-shot apply only,
-// local-only providers - see engine.TerraformEngine's own doc comment
-// for the full, deliberate scope shared by both), "ansible" (single-shot
-// local-connection playbook run, no remote inventory), and "packer"
-// (Docker-builder image build via the same DooD path compose uses, with
-// docker-socket-proxy's EXEC category now deliberately enabled - see
-// engine.PackerEngine's own doc comment).
+// internal/worker/engine's real Engine implementations. All 8
+// ExecutionEngine enum values are real now: "compose" (docker compose
+// up/down, reusing the same DooD pattern this operator's own
+// compose-platform project already proved this session),
+// "terraform"/"opentofu" (single-shot apply only, local-only providers -
+// see engine.TerraformEngine's own doc comment for the full, deliberate
+// scope shared by both), "ansible" (single-shot local-connection
+// playbook run, no remote inventory), "packer" (Docker-builder image
+// build via the same DooD path compose uses, with docker-socket-proxy's
+// EXEC category now deliberately enabled - see engine.PackerEngine's
+// own doc comment), "kubernetes" (single-shot kubectl apply),
+// "helm" (single-shot helmfile apply - see engine.HelmEngine's own doc
+// comment for why Helmfile, not raw Helm, is what ConfigBundle's
+// content actually is), and "kubespray" (single-shot cluster.yml bring-
+// up against real target servers over SSH). kubernetes/helm/kubespray
+// are also this codebase's first engines needing a real external
+// credential, carried per-workspace via JobAssignment.CredentialBundle
+// (worker.proto) rather than one Worker-wide shared target - see
+// engine.KubernetesEngine's own doc comment for the real design
+// reasoning.
 //
 // Deliberately not built here (documented gaps, not silent ones):
 // the plugin-subprocess-over-Unix-socket second layer
@@ -25,9 +35,11 @@
 // ownership - one Job's compose (or now packer) still shares the same
 // container namespace as every other Job's (no nested-dind-per-Job
 // isolation, an explicit, discussed tradeoff, not an oversight); and the
-// remaining three engine types (helm, kubespray, kubernetes) - all three
-// need a real target (a Kubernetes cluster, or real servers to
-// provision), deliberately deferred rather than built against nothing.
+// aspirational multi-Job-per-Run/phase model docs/architecture/
+// 03-domain-model.md describes for a Kubespray Run's own real multi-
+// phase playbook execution - that Job entity doesn't exist anywhere in
+// this codebase, KubesprayEngine is scoped to cluster.yml only (see its
+// own doc comment).
 package main
 
 import (
@@ -109,11 +121,14 @@ func main() {
 	// engine) - adding a third engine later means one new map entry
 	// here, nothing else in this file changes.
 	engines := map[string]engine.Engine{
-		"compose":   engine.NewComposeEngine(),
-		"terraform": engine.NewTerraformEngine(),
-		"opentofu":  engine.NewOpenTofuEngine(),
-		"ansible":   engine.NewAnsibleEngine(),
-		"packer":    engine.NewPackerEngine(),
+		"compose":    engine.NewComposeEngine(),
+		"terraform":  engine.NewTerraformEngine(),
+		"opentofu":   engine.NewOpenTofuEngine(),
+		"ansible":    engine.NewAnsibleEngine(),
+		"packer":     engine.NewPackerEngine(),
+		"kubernetes": engine.NewKubernetesEngine(),
+		"helm":       engine.NewHelmEngine(),
+		"kubespray":  engine.NewKubesprayEngine(),
 	}
 
 	// running/runningMu are declared here, not inside runOnce, and

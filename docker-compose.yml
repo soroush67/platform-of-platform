@@ -205,6 +205,22 @@ services:
       # use to *authenticate to* Vault, it isn't a Vault credential
       # itself).
       SECRETS_MASTER_KEY: "3d418e2e891b5035a949b726cdb03ef6548dab2281d321e54df83de3f0158dfd"
+      # RUN_STALE_AFTER default is 5m (internal/platform/config) - fine
+      # for compose/terraform/etc, but a real bug for KubesprayEngine: a
+      # real cluster.yml bring-up routinely takes 10-40+ minutes, and
+      # StaleRunReaperService (internal/execution/application/
+      # reap_stale_runs.go) marks a Run `errored` and unlocks its
+      # Workspace on this timeout WITHOUT ever sending the Worker a real
+      # CancelJob - a genuinely-still-running Kubespray apply would keep
+      # executing, unsupervised, while its now-unlocked Workspace became
+      # eligible for a second, concurrent Run against the same servers.
+      # A real correctness hazard, not cosmetic - traced and confirmed
+      # during this engine's own design, not assumed. Bumped globally
+      # (this codebase has no per-Workspace override yet) - a real,
+      # documented tradeoff, operator-confirmed: a genuinely crashed
+      # compose/terraform/etc Run now takes up to 2h to auto-unlock
+      # instead of 5m.
+      RUN_STALE_AFTER: "2h"
     volumes:
       - mtls-certs:/certs:ro
     ports:

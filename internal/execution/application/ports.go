@@ -118,7 +118,7 @@ type VariableResolver interface {
 // Returns (false, nil) when no connected Worker supports the requested
 // engine right now.
 type WorkerDispatcher interface {
-	Dispatch(ctx context.Context, runID, organizationID, workspaceID, executionEngine, configBundle string) (bool, error)
+	Dispatch(ctx context.Context, runID, organizationID, workspaceID, executionEngine, configBundle, credentialBundle string) (bool, error)
 }
 
 // WorkerCanceler is CancelRunService's port into the gRPC adapter's

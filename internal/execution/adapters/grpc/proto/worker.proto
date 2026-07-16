@@ -92,6 +92,16 @@ message JobAssignment {
   // this (a real repo checkout) doesn't exist in this codebase yet,
   // documented as a real, later integration point.
   string config_bundle = 5;
+  // credential_bundle is real per-workspace credential material (a
+  // kubeconfig, an SSH private key) - resolved from a second,
+  // engine-specific Variable the same live way config_bundle is
+  // (credentialVariableKeyByEngine, dispatch_run.go). Only
+  // kubernetes/helm/kubespray Jobs carry a non-empty value here; every
+  // other engine's Jobs leave it unset since they have no
+  // credentialVariableKeyByEngine entry - matches TerraformEngine's own
+  // already-documented "no cloud credentials, JobAssignment carries
+  // none to inject" reduction for engines that don't need one.
+  string credential_bundle = 6;
 }
 
 message JobStatusReport {

@@ -196,11 +196,40 @@ func TestRunDispatchService_PackerEngineResolvesPackerTemplateVariable(t *testin
 	}
 }
 
-// TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun covers
-// a real ExecutionEngine enum value (Workspace creation already
-// accepts it) that has no configVariableKeyByEngine entry yet - the
-// remaining three engines this Worker doesn't implement.
-func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T) {
+// TestRunDispatchService_KubernetesEngineResolvesConfigAndCredential
+// mirrors the terraform case above, but also proves
+// credentialVariableKeyByEngine's own branch - kubernetes is the first
+// engine that needs a second, credential-carrying Variable resolved
+// alongside its config.
+func TestRunDispatchService_KubernetesEngineResolvesConfigAndCredential(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "kubernetes")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "kubernetes_manifest", `apiVersion: v1\nkind: Namespace`)
+	resolver.set(testOrgID, testWorkspaceID, "kubernetes_kubeconfig", `apiVersion: v1\nkind: Config`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the kubernetes_manifest variable's content to be dispatched as the config bundle")
+	}
+	if dispatcher.lastCredentialBundle == "" {
+		t.Error("expected the kubernetes_kubeconfig variable's content to be dispatched as the credential bundle")
+	}
+}
+
+// TestRunDispatchService_HelmEngineResolvesConfigAndCredential mirrors
+// the kubernetes case above for the helm branch.
+func TestRunDispatchService_HelmEngineResolvesConfigAndCredential(t *testing.T) {
 	locker := newFakeWorkspaceLocker()
 	runRepo := newFakeRunRepo(locker)
 	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
@@ -208,6 +237,97 @@ func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T
 	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
 	engineReader := newFakeWorkspaceEngineReader()
 	engineReader.set(testOrgID, testWorkspaceID, "helm")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "helm_helmfile", `releases:\n  - name: x`)
+	resolver.set(testOrgID, testWorkspaceID, "helm_kubeconfig", `apiVersion: v1\nkind: Config`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the helm_helmfile variable's content to be dispatched as the config bundle")
+	}
+	if dispatcher.lastCredentialBundle == "" {
+		t.Error("expected the helm_kubeconfig variable's content to be dispatched as the credential bundle")
+	}
+}
+
+// TestRunDispatchService_KubesprayEngineResolvesConfigAndCredential
+// mirrors the kubernetes case above for the kubespray branch (an SSH
+// private key rather than a kubeconfig).
+func TestRunDispatchService_KubesprayEngineResolvesConfigAndCredential(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "kubespray")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "kubespray_inventory", `all:\n  hosts:\n    node1:`)
+	resolver.set(testOrgID, testWorkspaceID, "kubespray_ssh_key", `-----BEGIN OPENSSH PRIVATE KEY-----`)
+	dispatcher := newFakeWorkerDispatcher(true)
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, dispatcher, locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("HandleEvent: %v", err)
+	}
+	if dispatcher.lastConfigBundle == "" {
+		t.Error("expected the kubespray_inventory variable's content to be dispatched as the config bundle")
+	}
+	if dispatcher.lastCredentialBundle == "" {
+		t.Error("expected the kubespray_ssh_key variable's content to be dispatched as the credential bundle")
+	}
+}
+
+// TestRunDispatchService_MissingCredentialFailsTheRun mirrors
+// TestRunDispatchService_MissingConfigFailsTheRun - proves a missing
+// *credential* Variable (config present) fails the run the same
+// non-transient way, for an engine that requires one.
+func TestRunDispatchService_MissingCredentialFailsTheRun(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "kubernetes")
+	resolver := newFakeVariableResolver()
+	resolver.set(testOrgID, testWorkspaceID, "kubernetes_manifest", `apiVersion: v1\nkind: Namespace`)
+	// Deliberately no kubernetes_kubeconfig variable set.
+	svc := application.NewRunDispatchService(runRepo, engineReader, resolver, newFakeWorkerDispatcher(true), locker)
+
+	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))
+	if err != nil {
+		t.Fatalf("expected missing credential to be handled by failing the run, not returning an error, got: %v", err)
+	}
+	got, _ := runRepo.GetByID(context.Background(), testOrgID, run.ID)
+	if got.Status != domain.RunStatusFailed {
+		t.Errorf("expected the run to be marked failed, got %q", got.Status)
+	}
+	if locker.isLocked(testWorkspaceID) {
+		t.Error("expected the workspace lock to be released when the run fails")
+	}
+}
+
+// TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun covers
+// a hypothetical ExecutionEngine value with no configVariableKeyByEngine
+// entry - defense in depth, not a currently-real gap: all 8 real enum
+// values are mapped now (every engine has a real Worker-side
+// implementation), so this uses a clearly-fake string rather than a
+// real enum value.
+func TestRunDispatchService_EngineWithNoConfigKeyMappingFailsTheRun(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "user-1")
+	runRepo.put(run)
+	_, _ = locker.TryLock(context.Background(), testOrgID, testWorkspaceID, run.ID)
+	engineReader := newFakeWorkspaceEngineReader()
+	engineReader.set(testOrgID, testWorkspaceID, "some-future-engine")
 	svc := application.NewRunDispatchService(runRepo, engineReader, newFakeVariableResolver(), newFakeWorkerDispatcher(true), locker)
 
 	err := svc.HandleEvent(context.Background(), runQueuedEvent(run.ID, testWorkspaceID))

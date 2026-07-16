@@ -41,7 +41,7 @@ func TestRegistry_Dispatch_LocalMatch(t *testing.T) {
 	t.Cleanup(func() { reg.deregister("worker-1") })
 
 	runID := uuid.NewString()
-	dispatched, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle")
+	dispatched, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -54,6 +54,9 @@ func TestRegistry_Dispatch_LocalMatch(t *testing.T) {
 	assignment := cmd.GetJobAssignment()
 	if assignment == nil || assignment.RunId != runID {
 		t.Fatalf("expected a JobAssignment for run %s, got %+v", runID, cmd)
+	}
+	if assignment.ConfigBundle != "bundle" || assignment.CredentialBundle != "cred" {
+		t.Fatalf("expected ConfigBundle/CredentialBundle to flow through unchanged, got config=%q credential=%q", assignment.ConfigBundle, assignment.CredentialBundle)
 	}
 
 	got, err := redisClient.Get(ctx, runWorkerKey(runID)).Result()
@@ -73,7 +76,7 @@ func TestRegistry_Dispatch_NoMatchingEngineReturnsFalse(t *testing.T) {
 	reg.register(ctx, "worker-1", []string{"compose"}, nil)
 	t.Cleanup(func() { reg.deregister("worker-1") })
 
-	dispatched, err := reg.Dispatch(ctx, uuid.NewString(), "org-1", "ws-1", "terraform", "bundle")
+	dispatched, err := reg.Dispatch(ctx, uuid.NewString(), "org-1", "ws-1", "terraform", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -103,7 +106,7 @@ func TestRegistry_Dispatch_SkipsAFullQueueAndTriesTheNextWorker(t *testing.T) {
 	}
 
 	runID := uuid.NewString()
-	dispatched, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle")
+	dispatched, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -131,7 +134,7 @@ func TestRegistry_CancelJob_LocalDelivery(t *testing.T) {
 	t.Cleanup(func() { reg.deregister("worker-1") })
 
 	runID := uuid.NewString()
-	if _, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle"); err != nil {
+	if _, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle", "cred"); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 	recvCommand(t, jobs) // drain the JobAssignment
@@ -176,7 +179,7 @@ func TestRegistry_Forget_RemovesLocalAndRedisState(t *testing.T) {
 	t.Cleanup(func() { reg.deregister("worker-1") })
 
 	runID := uuid.NewString()
-	if _, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle"); err != nil {
+	if _, err := reg.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle", "cred"); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
 
@@ -249,7 +252,7 @@ func TestRegistry_CancelJob_ForwardsCrossInstanceViaRedis(t *testing.T) {
 	t.Cleanup(func() { regA.deregister("worker-1") })
 
 	runID := uuid.NewString()
-	dispatched, err := regA.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle")
+	dispatched, err := regA.Dispatch(ctx, runID, "org-1", "ws-1", "compose", "bundle", "cred")
 	if err != nil {
 		t.Fatalf("Dispatch (instance A): %v", err)
 	}
