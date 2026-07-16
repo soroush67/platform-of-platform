@@ -89,6 +89,18 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 	return &user, nil
 }
 
+// Count backs the first-user bootstrap check
+// (httpserver.RequireAuthOrFirstUserBootstrap) - a fresh deployment with
+// zero rows in this table is the one case POST /users is allowed to run
+// unauthenticated, so an operator can create their very first login-
+// capable account at all. Every other caller (count > 0) goes through
+// the normal RequireAuth path.
+func (r *UserRepository) Count(ctx context.Context) (int, error) {
+	var count int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count)
+	return count, err
+}
+
 // GetUser is a thin sibling of GetByID, returned as primitives rather
 // than *domain.User - it's what satisfies Tenancy's own UserReader port
 // (internal/tenancy/application/ports.go) for the member roster

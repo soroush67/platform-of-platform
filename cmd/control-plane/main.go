@@ -332,7 +332,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", healthHandler(pool))
-	mux.HandleFunc("POST /api/v1/users", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.CreateUserHandler(createUserService)))
+	mux.HandleFunc("POST /api/v1/users", httpserver.RequireAuthOrFirstUserBootstrap(cfg.JWTSigningKey, apiKeyResolver, userRepo.Count, identityhttp.CreateUserHandler(createUserService)))
 	mux.HandleFunc("GET /api/v1/users/me", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, identityhttp.GetOwnUserHandler(getOwnUserService)))
 	mux.HandleFunc("POST /api/v1/auth/login", identityhttp.LoginHandler(authenticateService, refreshTokenService, loginLimiter, cfg.JWTSigningKey))
 	mux.HandleFunc("POST /api/v1/auth/refresh", identityhttp.RefreshTokenHandler(refreshTokenService, cfg.JWTSigningKey))

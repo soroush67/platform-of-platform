@@ -24,15 +24,19 @@ type CreateUserInput struct {
 // resource-path list under an org, deliberately: User is platform-global
 // (docs/architecture/03-domain-model.md §3), so it lives at the API root
 // alongside orgs, not nested under one. Route is behind
-// httpserver.RequireAuth (cmd/control-plane/main.go) - it used to be the
-// one mutating route in this codebase left open, a real gap only closed
-// once the admin-panel "create user & add to org" flow gave it its
-// first actual caller. Deliberately no organization:manage (or any
-// other org-scoped) check here - creating a User is org-independent by
-// design; the real authorization boundary is the very next call in that
-// flow, POST /orgs/{id}/members, which does check organization:manage.
-// Real provisioning (OIDC first-login, admin invite) is still Stage
-// 11/13 territory, not built here.
+// httpserver.RequireAuthOrFirstUserBootstrap (cmd/control-plane/main.go),
+// not plain RequireAuth - it used to be the one mutating route in this
+// codebase left open entirely, a real gap only closed once the
+// admin-panel "create user & add to org" flow gave it its first actual
+// caller; the bootstrap variant exists because gating it behind plain
+// RequireAuth would leave a fresh, zero-user deployment with no way to
+// ever create its first login-capable account at all (see that
+// function's own doc comment). Deliberately no organization:manage (or
+// any other org-scoped) check here - creating a User is org-independent
+// by design; the real authorization boundary is the very next call in
+// that flow, POST /orgs/{id}/members, which does check
+// organization:manage. Real provisioning (OIDC first-login, admin
+// invite) is still Stage 11/13 territory, not built here.
 type CreateUserService struct {
 	repo UserRepository
 }

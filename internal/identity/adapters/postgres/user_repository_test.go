@@ -121,6 +121,37 @@ func TestUserRepository_GetUser(t *testing.T) {
 	}
 }
 
+// TestUserRepository_Count_ReflectsRealInsert asserts a delta, not an
+// absolute count - the users table is shared with every other test in
+// this package (and leftover rows from real usage), so an absolute
+// assertion would be flaky by construction. Proving Count actually
+// tracks a real INSERT is the honest, real thing to check.
+func TestUserRepository_Count_ReflectsRealInsert(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	repo := postgres.NewUserRepository(pool)
+
+	before, err := repo.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count (before): %v", err)
+	}
+
+	u := mustLocalUser(t)
+	if err := repo.Create(ctx, u); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM users WHERE id = $1`, u.ID) })
+
+	after, err := repo.Count(ctx)
+	if err != nil {
+		t.Fatalf("Count (after): %v", err)
+	}
+	if after != before+1 {
+		t.Errorf("expected Count to increase by exactly 1 after a real Create, got before=%d after=%d", before, after)
+	}
+}
+
 func TestUserRepository_UpdatePasswordHash(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.AppPool(t)
