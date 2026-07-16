@@ -3,7 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="theme-color" content="#ff0033" />
     <title>platform-of-platform</title>
+    <script>
+      // No-flash-of-wrong-theme: sets data-theme on <html> before React
+      // (or even CSS's own prefers-color-scheme block) ever paints -
+      // src/theme.ts's own getStoredTheme() does the exact same
+      // localStorage-then-prefers-color-scheme check afterwards, kept
+      // deliberately in sync with this so neither one can disagree with
+      // the other after first paint.
+      (function () {
+        var stored = localStorage.getItem("pop_theme");
+        var theme = stored === "dark" || stored === "light"
+          ? stored
+          : (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

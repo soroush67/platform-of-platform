@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate, useParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
 import { useOrganizations } from "../api/hooks/useTenancy";
+import { useTheme } from "../theme";
 
 const NAV_ITEMS = [
   { to: "", label: "Overview", end: true },
@@ -22,10 +23,14 @@ export function OrgLayout() {
   const { data: orgs } = useOrganizations();
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [theme, toggleTheme] = useTheme();
 
   return (
     <div className="org-layout">
       <nav className="sidebar">
+        <div className="sidebar-brand">
+          <img src="/logo-horizontal.png" alt="Kaman Insurance" />
+        </div>
         <div className="sidebar-org-switcher">
           <select
             value={orgId}
@@ -52,9 +57,14 @@ export function OrgLayout() {
         </div>
         <div className="sidebar-user">
           <div>{user?.username ?? "…"}</div>
-          <button className="secondary" onClick={logout}>
-            Sign out
-          </button>
+          <div className="sidebar-user-actions">
+            <button className="secondary theme-toggle" onClick={toggleTheme}>
+              {theme === "dark" ? "Light mode" : "Dark mode"}
+            </button>
+            <button className="secondary" onClick={logout}>
+              Sign out
+            </button>
+          </div>
         </div>
       </nav>
       <div className="content">

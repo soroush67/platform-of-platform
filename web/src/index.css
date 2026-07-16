@@ -1,30 +1,59 @@
+/* Color system - real production values fetched from kamaninsurance.ir's
+   own compiled CSS (Tailwind-style 50-900 scales), not read off a
+   screenshot. Brand colors (primary/accent/secondary/warning) stay
+   identical between themes - only backgrounds/borders/text swap between
+   dark and light, the standard pattern. Dark is the default (:root, no
+   attribute); [data-theme="light"] overrides it; prefers-color-scheme is
+   kept only as a same-values fallback for the instant before the
+   no-flash inline script in index.html sets the real attribute. */
 :root {
-  --bg: #0f1115;
-  --bg-panel: #161922;
-  --bg-panel-2: #1c202b;
-  --border: #2a2f3d;
-  --text: #e6e8ee;
-  --text-dim: #9aa1b2;
-  --accent: #5b8cff;
-  --accent-dim: #3a5cc9;
-  --danger: #e5534b;
-  --success: #3fb950;
-  --warning: #d4a72c;
+  --bg: #0a0a0a;
+  --bg-panel: #171717;
+  --bg-panel-2: #1d202e;
+  --border: #32354e;
+  --text: #ededf1;
+  --text-dim: #83869e;
+
+  --primary: #ff0033;
+  --primary-hover: #e8002e;
+  --primary-tint: #ff00331f;
+  --accent: #2dd7be;
+  --accent-tint: #2dd7be1f;
+  --secondary: #6b6f8b;
+  --success: #00bb7f;
+  --success-tint: #00bb7f1f;
+  --warning: #fac300;
+  --warning-tint: #fac3001f;
+  --danger: #b50024;
+  --danger-tint: #b500241a;
+
   --radius: 6px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --radius-lg: 8px;
+  --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f5f6f8;
+  :root:not([data-theme="dark"]) {
+    --bg: #f9fafb;
     --bg-panel: #ffffff;
-    --bg-panel-2: #f0f1f4;
-    --border: #d9dce3;
-    --text: #1b1e27;
-    --text-dim: #5c6270;
-    --accent: #2e5cdb;
-    --accent-dim: #1f3f9e;
+    --bg-panel-2: #ededf1;
+    --border: #e5e7eb;
+    --text: #1d202e;
+    --text-dim: #6b6f8b;
+    --shadow-card: 0 2px 8px rgba(29, 32, 46, 0.06);
   }
+}
+
+:root[data-theme="light"] {
+  --bg: #f9fafb;
+  --bg-panel: #ffffff;
+  --bg-panel-2: #ededf1;
+  --border: #e5e7eb;
+  --text: #1d202e;
+  --text-dim: #6b6f8b;
+  --shadow-card: 0 2px 8px rgba(29, 32, 46, 0.06);
 }
 
 * {
@@ -41,10 +70,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 a {
-  color: var(--accent);
+  color: var(--primary);
   text-decoration: none;
 }
 a:hover {
@@ -63,13 +93,26 @@ a:hover {
 }
 
 .sidebar {
-  width: 220px;
+  width: 232px;
   flex-shrink: 0;
   background: var(--bg-panel);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+.sidebar-brand {
+  padding: 16px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-brand img {
+  height: 28px;
+  width: auto;
+  object-fit: contain;
 }
 
 .sidebar-org-switcher {
@@ -90,20 +133,24 @@ a:hover {
 }
 
 .sidebar-nav a {
-  padding: 8px 10px;
+  padding: 8px 10px 8px 8px;
   border-radius: var(--radius);
-  color: var(--text);
+  color: var(--text-dim);
   font-size: 14px;
+  font-weight: 500;
+  border-left: 3px solid transparent;
 }
 
 .sidebar-nav a:hover {
   background: var(--bg-panel-2);
+  color: var(--text);
   text-decoration: none;
 }
 
 .sidebar-nav a.active {
-  background: var(--accent-dim);
-  color: white;
+  background: var(--primary-tint);
+  border-left-color: var(--primary);
+  color: var(--primary);
 }
 
 .sidebar-user {
@@ -111,11 +158,25 @@ a:hover {
   border-top: 1px solid var(--border);
   font-size: 13px;
   color: var(--text-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.sidebar-user button {
-  margin-top: 6px;
-  width: 100%;
+.sidebar-user-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.sidebar-user-actions button {
+  flex: 1;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
 }
 
 .content {
@@ -147,21 +208,25 @@ table {
   border-collapse: collapse;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-card);
 }
 
 th,
 td {
   text-align: left;
-  padding: 8px 12px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
 
 th {
   color: var(--text-dim);
-  font-weight: 500;
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
   background: var(--bg-panel-2);
 }
 
@@ -172,7 +237,8 @@ tr:last-child td {
 .card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
   padding: 16px;
   margin-bottom: 16px;
 }
@@ -186,16 +252,18 @@ textarea {
 }
 
 button {
-  background: var(--accent);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: var(--radius);
   padding: 7px 14px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background-color 0.12s ease;
 }
 
 button:hover {
-  background: var(--accent-dim);
+  background: var(--primary-hover);
 }
 
 button:disabled {
@@ -209,8 +277,16 @@ button.secondary {
   border: 1px solid var(--border);
 }
 
+button.secondary:hover {
+  background: var(--border);
+}
+
 button.danger {
   background: var(--danger);
+}
+
+button.danger:hover {
+  background: #8c001c;
 }
 
 input,
@@ -248,7 +324,7 @@ label {
 }
 
 .error-banner {
-  background: rgba(229, 83, 75, 0.15);
+  background: var(--danger-tint);
   border: 1px solid var(--danger);
   color: var(--text);
   border-radius: var(--radius);
@@ -257,32 +333,36 @@ label {
   margin-bottom: 12px;
 }
 
+/* Metronic "light" badge variant - tinted background, solid text, no
+   border (previously outlined: transparent bg + colored border). */
 .badge {
   display: inline-block;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
   font-size: 12px;
+  font-weight: 500;
   background: var(--bg-panel-2);
-  border: 1px solid var(--border);
+  color: var(--text-dim);
 }
 
 .badge-success {
   color: var(--success);
-  border-color: var(--success);
+  background: var(--success-tint);
 }
 
 .badge-danger {
   color: var(--danger);
-  border-color: var(--danger);
+  background: var(--danger-tint);
 }
 
 .badge-warning {
   color: var(--warning);
-  border-color: var(--warning);
+  background: var(--warning-tint);
 }
 
 .badge-dim {
   color: var(--text-dim);
+  background: var(--bg-panel-2);
 }
 
 .muted {
@@ -307,7 +387,8 @@ label {
 .modal {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
   padding: 20px;
   min-width: 360px;
   max-width: 560px;
@@ -316,8 +397,16 @@ label {
 .login-shell {
   height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 20px;
+}
+
+.login-logo {
+  height: 40px;
+  width: auto;
+  object-fit: contain;
 }
 
 .login-card {

@@ -34,6 +34,7 @@ export function LoginPage() {
 
   return (
     <div className="login-shell">
+      <img src="/logo-horizontal.png" alt="Kaman Insurance" className="login-logo" />
       <div className="card login-card">
         <h1>platform-of-platform</h1>
         {error && <div className="error-banner">{error}</div>}
