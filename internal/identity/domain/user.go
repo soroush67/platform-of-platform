@@ -19,6 +19,15 @@ func (e *ValidationError) Error() string { return e.Message }
 var ErrUserNotFound = errors.New("user not found")
 var ErrInvalidCredentials = errors.New("invalid credentials")
 
+// ErrUserAlreadyExists - users.username/users.email are both UNIQUE
+// (migrations/0001_init.up.sql) - a duplicate surfaces as a real
+// Postgres unique violation (UserRepository.Create catches
+// pgErr.Code == "23505"), same pattern as tenancy/domain's
+// ErrOrganizationSlugTaken/ErrProjectAlreadyExists/ErrTeamAlreadyExists
+// and rbac/domain's ErrRoleAlreadyExists, mapped to HTTP 409 instead of
+// falling through to a generic 500.
+var ErrUserAlreadyExists = errors.New("a user with this username or email already exists")
+
 // ErrForbidden - same "known member, action their role doesn't grant"
 // meaning as every other context's own sentinel (e.g.
 // tenancy/domain.ErrForbidden), redeclared here per this codebase's

@@ -213,6 +213,37 @@ func (f *fakePermissionChecker) grant(orgID, userID, permission string) {
 	f.perms[orgID+"|"+userID+"|"+permission] = true
 }
 
+// fakeVisibilityChecker/fakeEnvironmentProjectResolver back the two new
+// ports ListVariablesService needs (project_visibility.go, ports.go) -
+// same shape as the application-layer tests' own copies (a different
+// package, can't share the type directly).
+type fakeVisibilityChecker struct {
+	mu     sync.Mutex
+	grants map[string]bool
+}
+
+func newFakeVisibilityChecker() *fakeVisibilityChecker {
+	return &fakeVisibilityChecker{grants: map[string]bool{}}
+}
+
+func (f *fakeVisibilityChecker) HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.grants[organizationID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID], nil
+}
+
+func (f *fakeVisibilityChecker) grant(orgID, userID, permission, scopeType, scopeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[orgID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID] = true
+}
+
+type fakeEnvironmentProjectResolver struct{}
+
+func (f *fakeEnvironmentProjectResolver) ProjectIDForEnvironment(ctx context.Context, organizationID, environmentID string) (string, error) {
+	return "", domain.ErrScopeNotFound
+}
+
 type fakeOrganizationChecker struct{}
 
 func (f *fakeOrganizationChecker) IsArchived(ctx context.Context, organizationID string) (bool, error) {

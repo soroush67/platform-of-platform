@@ -259,3 +259,27 @@ func TestOrganizationRepository_Purge(t *testing.T) {
 		t.Error("expected Purge to leave the actor's own user row untouched")
 	}
 }
+
+func TestOrganizationRepository_Create_DuplicateSlugRejected(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	repo := tenancypg.NewOrganizationRepository(pool)
+	actorID := insertUser(t, root)
+
+	slug := "dup-org-" + uuid.NewString()[:8]
+	org1, _ := domain.NewOrganization("Org One", slug)
+	if err := repo.Create(ctx, org1, actorID); err != nil {
+		t.Fatalf("Create (first): %v", err)
+	}
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org1.ID)
+		dbtest.DeleteOrganization(t, root, org1.ID)
+	})
+
+	org2, _ := domain.NewOrganization("Org Two", slug)
+	err := repo.Create(ctx, org2, actorID)
+	if !errors.Is(err, domain.ErrOrganizationSlugTaken) {
+		t.Fatalf("expected ErrOrganizationSlugTaken for a duplicate slug, got: %v", err)
+	}
+}

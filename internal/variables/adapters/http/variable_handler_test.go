@@ -131,7 +131,7 @@ func TestListVariablesHandler_Succeeds(t *testing.T) {
 	repo.put(v)
 	membership := newFakeMembershipChecker()
 	membership.add("org-1", "user-1")
-	svc := application.NewListVariablesService(repo, membership)
+	svc := application.NewListVariablesService(repo, membership, newFakePermissionChecker(), newFakeVisibilityChecker(), newFakeWorkspaceChecker(), &fakeEnvironmentProjectResolver{})
 	handler := withAuth(httpadapter.ListVariablesHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/variables?scope_type=organization&scope_id=org-1", "user-1", nil)

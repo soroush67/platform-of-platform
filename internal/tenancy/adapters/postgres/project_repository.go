@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/tenancy/domain"
@@ -36,6 +38,10 @@ func (r *ProjectRepository) Create(ctx context.Context, project *domain.Project)
 		project.ID, project.OrganizationID, project.Name, project.Slug, project.Description, project.CreatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrProjectAlreadyExists
+		}
 		return err
 	}
 

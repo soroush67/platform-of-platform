@@ -58,6 +58,52 @@ func TestRoleRepository_CreateAndGetByID(t *testing.T) {
 	}
 }
 
+func TestRoleRepository_Update_RewritesPermissionsInPlace(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	repo := rbacpg.NewRoleRepository(pool)
+	orgID := insertOrg(t, root)
+
+	role, _ := domain.NewRole(orgID, "deployer", []domain.Permission{domain.PermissionWorkspaceApply})
+	if err := repo.Create(ctx, role); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM roles WHERE id = $1`, role.ID) })
+
+	role.Permissions = []domain.Permission{domain.PermissionWorkspaceRead, domain.PermissionWorkspaceManage}
+	if err := repo.Update(ctx, role); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, err := repo.GetByID(ctx, orgID, role.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Name != "deployer" {
+		t.Errorf("expected the name to stay unchanged, got %q", got.Name)
+	}
+	if len(got.Permissions) != 2 {
+		t.Errorf("expected the updated 2-permission set, got %+v", got.Permissions)
+	}
+}
+
+func TestRoleRepository_Update_BuiltinRoleRejected(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	repo := rbacpg.NewRoleRepository(pool)
+
+	if err := repo.SeedBuiltinRoles(ctx); err != nil {
+		t.Fatalf("SeedBuiltinRoles: %v", err)
+	}
+	builtin := &domain.Role{ID: uuid.NewString(), OrganizationID: nil, Name: domain.RoleOwner, Permissions: []domain.Permission{domain.PermissionOrganizationManage}}
+
+	var validationErr *domain.ValidationError
+	if err := repo.Update(ctx, builtin); !errors.As(err, &validationErr) {
+		t.Fatalf("expected a ValidationError attempting to update a built-in role, got: %v", err)
+	}
+}
+
 func TestRoleRepository_Create_DuplicateNameRejected(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.AppPool(t)

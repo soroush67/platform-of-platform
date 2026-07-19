@@ -12,6 +12,12 @@ import (
 // ambiguity as ErrOrganizationNotFound's own doc comment.
 var ErrProjectNotFound = errors.New("project not found")
 
+// ErrProjectAlreadyExists - projects.slug is unique per organization_id
+// (migrations/0003_projects.up.sql) - same real-Postgres-unique-
+// violation-mapped-to-a-sentinel pattern as ErrOrganizationSlugTaken,
+// mapped to HTTP 409.
+var ErrProjectAlreadyExists = errors.New("a project with this slug already exists in this organization")
+
 // Project is an aggregate root referencing organization_id
 // (docs/architecture/03-domain-model.md §2) - "a grouping of
 // Environments/Workspaces - typically 'one product/service' inside an

@@ -81,6 +81,10 @@ func CreateProjectHandler(svc *application.CreateProjectService) http.HandlerFun
 				httpserver.WriteProblem(w, http.StatusConflict, "organization is archived", "")
 				return
 			}
+			if errors.Is(err, domain.ErrProjectAlreadyExists) {
+				httpserver.WriteProblem(w, http.StatusConflict, "project already exists", err.Error())
+				return
+			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to create project", "")
 			return
 		}

@@ -116,7 +116,9 @@ func TestListRunsHandler_Succeeds(t *testing.T) {
 	membership.add("org-1", "user-1")
 	workspaceChecker := newFakeWorkspaceChecker()
 	workspaceChecker.add("org-1", "project-1", "ws-1")
-	svc := application.NewListRunsService(runRepo, membership, workspaceChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant("org-1", "user-1", "project:read", "project", "project-1")
+	svc := application.NewListRunsService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), visibilityChecker)
 	handler := withAuth(httpadapter.ListRunsHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/project-1/workspaces/ws-1/runs", "user-1", nil)
@@ -137,7 +139,7 @@ func TestGetRunHandler_NonMemberGetsNotFound(t *testing.T) {
 	runRepo.put(run)
 	workspaceChecker := newFakeWorkspaceChecker()
 	workspaceChecker.add("org-1", "project-1", "ws-1")
-	svc := application.NewGetRunService(runRepo, newFakeMembershipChecker(), workspaceChecker)
+	svc := application.NewGetRunService(runRepo, newFakeMembershipChecker(), workspaceChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
 	handler := withAuth(httpadapter.GetRunHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/project-1/workspaces/ws-1/runs/"+run.ID, "stranger", nil)

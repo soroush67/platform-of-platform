@@ -8,9 +8,11 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/platform/outbox"
@@ -60,6 +62,10 @@ func (r *OrganizationRepository) Create(ctx context.Context, org *domain.Organiz
 		org.ID, org.Name, org.Slug, settings, quota, org.Status, org.CreatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrOrganizationSlugTaken
+		}
 		return err
 	}
 
@@ -231,12 +237,15 @@ func (r *OrganizationRepository) FindOrganizationsPastPurgeWindow(ctx context.Co
 // docs/architecture/13-module-identity-rbac-tenancy.md §1 describes -
 // Archive (above) is the reversible soft-delete an Owner triggers
 // directly; Purge is what PurgeReaperService calls once an org has sat
-// archived past the grace window, and it's genuinely irreversible (no
-// outbox event - by the time this runs, deleting outbox_events is one
-// of this very method's own steps, so there's nothing left to write an
-// event *into*). Still needs the same set_config(...)-scoped-transaction
-// every other org-scoped write in this codebase uses: every table here
-// except outbox_events has FORCE ROW LEVEL SECURITY
+// archived past the grace window (and, since DeleteOrganizationService,
+// what a direct operator-triggered hard-delete calls immediately,
+// skipping the grace window entirely - Purge itself doesn't care which
+// caller invoked it). It's genuinely irreversible (no outbox event - by
+// the time this runs, deleting outbox_events is one of this very
+// method's own steps, so there's nothing left to write an event
+// *into*). Still needs the same set_config(...)-scoped-transaction every
+// other org-scoped write in this codebase uses: every table here except
+// outbox_events has FORCE ROW LEVEL SECURITY
 // (migrations/0001_init.up.sql onward) - without app.current_org_id set,
 // platform_app can't see or delete a single row in any of them, RLS
 // silently narrows every DELETE to zero rows instead of erroring (found
@@ -245,10 +254,25 @@ func (r *OrganizationRepository) FindOrganizationsPastPurgeWindow(ctx context.Co
 // deleted in an order that respects its own foreign keys into ones
 // deleted after it (migrations/0001-0012's own dependency graph, read
 // directly rather than guessed) - runs before workspaces, role_bindings
-// before roles, etc. `users` is deliberately NOT touched: User is
-// platform-global (docs/architecture/03-domain-model.md §3), a purged
-// org's members simply lose their OrganizationMembership row, they
-// don't cease to exist as Users.
+// before roles, operations before compose_files/machines, etc. `users`
+// is deliberately NOT touched: User is platform-global
+// (docs/architecture/03-domain-model.md §3), a purged org's members
+// simply lose their OrganizationMembership row, they don't cease to
+// exist as Users.
+//
+// Secrets (0018)/Service Account+API Key (0017)/Fleet (0019) tables were
+// added to this list later than the original 0001-0012 set above - found
+// missing (not just guessed) while wiring the new direct hard-delete
+// path: without these, Purge would hit a real FK violation on the final
+// `DELETE FROM organizations` for any org with a secret mount, machine,
+// compose file, or service account. compose_file_networks/
+// compose_file_volumes/fleet_variables all have `ON DELETE CASCADE` into
+// compose_files already (migrations/0019_fleet.up.sql) - listed
+// explicitly anyway, matching this method's existing "every step named,
+// nothing left implicit" style rather than relying on cascade silently
+// doing it. migrations/0021 grants the DELETE privilege on secret_mounts/
+// compose_files/operations this newly needs (0017/0019 already granted
+// the rest).
 func (r *OrganizationRepository) Purge(ctx context.Context, organizationID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -265,6 +289,17 @@ func (r *OrganizationRepository) Purge(ctx context.Context, organizationID strin
 		`DELETE FROM outbox_events WHERE organization_id = $1`,
 		`DELETE FROM idempotency_keys WHERE organization_id = $1`,
 		`DELETE FROM variables WHERE organization_id = $1`,
+		`DELETE FROM secret_mounts WHERE organization_id = $1`,
+		`DELETE FROM operations WHERE organization_id = $1`,
+		`DELETE FROM fleet_variables WHERE organization_id = $1`,
+		`DELETE FROM compose_file_volumes WHERE organization_id = $1`,
+		`DELETE FROM compose_file_networks WHERE organization_id = $1`,
+		`DELETE FROM compose_files WHERE organization_id = $1`,
+		`DELETE FROM machines WHERE organization_id = $1`,
+		`DELETE FROM networks WHERE organization_id = $1`,
+		`DELETE FROM volumes WHERE organization_id = $1`,
+		`DELETE FROM api_keys WHERE organization_id = $1`,
+		`DELETE FROM service_accounts WHERE organization_id = $1`,
 		`DELETE FROM workspaces WHERE organization_id = $1`,
 		`DELETE FROM environments WHERE organization_id = $1`,
 		`DELETE FROM team_memberships WHERE organization_id = $1`,

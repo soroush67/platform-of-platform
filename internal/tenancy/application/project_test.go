@@ -79,7 +79,28 @@ func TestCreateProjectService_NonMemberGetsOrgNotFound(t *testing.T) {
 	}
 }
 
-func TestGetProjectService_RequiresProjectRead(t *testing.T) {
+func TestGetProjectService_OwnerAdminBypassesVisibility(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin")
+	projectRepo := newFakeProjectRepo()
+	project, _ := domain.NewProject(org.ID, "p", "p", "")
+	_ = projectRepo.Create(context.Background(), project)
+
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin", "organization:manage")
+	svc := application.NewGetProjectService(projectRepo, membershipRepo, permChecker, newFakeVisibilityChecker())
+
+	got, err := svc.Execute(context.Background(), org.ID, project.ID, "admin")
+	if err != nil {
+		t.Fatalf("expected organization:manage to bypass per-project visibility entirely, got: %v", err)
+	}
+	if got.ID != project.ID {
+		t.Errorf("expected project %q, got %q", project.ID, got.ID)
+	}
+}
+
+func TestGetProjectService_RequiresProjectScopeGrant(t *testing.T) {
 	orgRepo := newFakeOrgRepo()
 	membershipRepo := newFakeMembershipRepo()
 	org := setupOrgWithMember(t, orgRepo, membershipRepo, "reader")
@@ -87,22 +108,24 @@ func TestGetProjectService_RequiresProjectRead(t *testing.T) {
 	project, _ := domain.NewProject(org.ID, "p", "p", "")
 	_ = projectRepo.Create(context.Background(), project)
 
-	permChecker := newFakePermChecker()
-	permChecker.grant(org.ID, "reader", "project:read")
-	svc := application.NewGetProjectService(projectRepo, membershipRepo, permChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(org.ID, "reader", "project:read", "project", project.ID)
+	svc := application.NewGetProjectService(projectRepo, membershipRepo, newFakePermChecker(), visibilityChecker)
 
 	got, err := svc.Execute(context.Background(), org.ID, project.ID, "reader")
 	if err != nil {
-		t.Fatalf("expected a member with project:read to read the project, got: %v", err)
+		t.Fatalf("expected a project-scope project:read grant to allow reading it, got: %v", err)
 	}
 	if got.ID != project.ID {
 		t.Errorf("expected project %q, got %q", project.ID, got.ID)
 	}
 
-	unauthorized := newFakePermChecker()
-	svc = application.NewGetProjectService(projectRepo, membershipRepo, unauthorized)
+	// An org-wide member with no project-scope grant at all (and not
+	// organization:manage) is the whole point of this change - a plain
+	// org member no longer sees every project by default.
+	svc = application.NewGetProjectService(projectRepo, membershipRepo, newFakePermChecker(), newFakeVisibilityChecker())
 	if _, err := svc.Execute(context.Background(), org.ID, project.ID, "reader"); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("expected ErrForbidden without project:read, got: %v", err)
+		t.Fatalf("expected ErrForbidden without a project-scope grant or organization:manage, got: %v", err)
 	}
 }
 
@@ -120,9 +143,9 @@ func TestListProjectsService_ScopedToOrganization(t *testing.T) {
 	_ = projectRepo.Create(context.Background(), pA)
 	_ = projectRepo.Create(context.Background(), pB)
 
-	permChecker := newFakePermChecker()
-	permChecker.grant(orgA.ID, "user-1", "project:read")
-	svc := application.NewListProjectsService(projectRepo, membershipRepo, permChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(orgA.ID, "user-1", "project:read", "project", pA.ID)
+	svc := application.NewListProjectsService(projectRepo, membershipRepo, newFakePermChecker(), visibilityChecker)
 	got, err := svc.Execute(context.Background(), orgA.ID, "user-1")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -132,14 +155,45 @@ func TestListProjectsService_ScopedToOrganization(t *testing.T) {
 	}
 }
 
-func TestListProjectsService_RequiresProjectRead(t *testing.T) {
+func TestListProjectsService_HiddenWithoutGrant(t *testing.T) {
 	orgRepo := newFakeOrgRepo()
 	membershipRepo := newFakeMembershipRepo()
 	org := setupOrgWithMember(t, orgRepo, membershipRepo, "user-1")
 	projectRepo := newFakeProjectRepo()
+	project, _ := domain.NewProject(org.ID, "p", "p", "")
+	_ = projectRepo.Create(context.Background(), project)
 
-	svc := application.NewListProjectsService(projectRepo, membershipRepo, newFakePermChecker())
-	if _, err := svc.Execute(context.Background(), org.ID, "user-1"); !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("expected ErrForbidden without project:read, got: %v", err)
+	// A plain member with zero project-scope grants sees an empty list -
+	// a valid, non-error outcome, not ErrForbidden (they're a real
+	// member, they just can't see any Project yet).
+	svc := application.NewListProjectsService(projectRepo, membershipRepo, newFakePermChecker(), newFakeVisibilityChecker())
+	got, err := svc.Execute(context.Background(), org.ID, "user-1")
+	if err != nil {
+		t.Fatalf("expected no error, just an empty list, got: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected zero visible projects, got %+v", got)
+	}
+}
+
+func TestListProjectsService_OwnerAdminSeesEverything(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin")
+	projectRepo := newFakeProjectRepo()
+	pA, _ := domain.NewProject(org.ID, "a", "a", "")
+	pB, _ := domain.NewProject(org.ID, "b", "b", "")
+	_ = projectRepo.Create(context.Background(), pA)
+	_ = projectRepo.Create(context.Background(), pB)
+
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin", "organization:manage")
+	svc := application.NewListProjectsService(projectRepo, membershipRepo, permChecker, newFakeVisibilityChecker())
+	got, err := svc.Execute(context.Background(), org.ID, "admin")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected organization:manage to see every project regardless of any per-project grant, got %+v", got)
 	}
 }

@@ -140,3 +140,19 @@ func TestProjectRepository_ListByOrganization(t *testing.T) {
 		t.Errorf("expected zero projects for an unrelated organization, got %d", len(otherOrgProjects))
 	}
 }
+
+func TestProjectRepository_Create_DuplicateSlugRejected(t *testing.T) {
+	_, projectRepo, org := setupProjectTest(t)
+	ctx := context.Background()
+
+	project1, _ := domain.NewProject(org.ID, "Project One", "dup-slug", "")
+	if err := projectRepo.Create(ctx, project1); err != nil {
+		t.Fatalf("Create (first): %v", err)
+	}
+
+	project2, _ := domain.NewProject(org.ID, "Project Two", "dup-slug", "")
+	err := projectRepo.Create(ctx, project2)
+	if !errors.Is(err, domain.ErrProjectAlreadyExists) {
+		t.Fatalf("expected ErrProjectAlreadyExists for a duplicate slug in the same org, got: %v", err)
+	}
+}

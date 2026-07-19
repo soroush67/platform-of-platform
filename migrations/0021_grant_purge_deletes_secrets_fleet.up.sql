@@ -1,0 +1,13 @@
+-- Purge()'s table list (internal/tenancy/adapters/postgres/organization_repository.go)
+-- predates the Secrets (0018), Service Account/API Key (0017), and Fleet
+-- (0019) migrations - extending it to actually cover those tables (done
+-- alongside this migration, for the new hard-delete-any-org path) needs
+-- the matching DELETE grant here too, same class of bug 0014's own
+-- comment already documents hitting once for the original table list.
+-- compose_files and operations were previously only granted SELECT,
+-- INSERT, (UPDATE) - deliberately no DELETE, since neither is ever
+-- row-deleted by any *normal* application code path (compose_files is
+-- edited/replaced in place, operations is an immutable history) - a
+-- real hard-delete-the-whole-organization is the one legitimate
+-- exception to that.
+GRANT DELETE ON secret_mounts, compose_files, operations TO platform_app;

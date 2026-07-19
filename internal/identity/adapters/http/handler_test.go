@@ -31,7 +31,7 @@ func mustLocalUser(t *testing.T, username, password string) *domain.User {
 }
 
 func TestCreateUserHandler_InvalidJSONBody(t *testing.T) {
-	svc := application.NewCreateUserService(newFakeUserRepo())
+	svc := application.NewCreateUserService(newFakeUserRepo(), &fakeDefaultOrgBootstrapper{})
 	handler := httpadapter.CreateUserHandler(svc)
 
 	req := httptest.NewRequest("POST", "/api/v1/users", newReader([]byte(`not json`)))
@@ -44,7 +44,7 @@ func TestCreateUserHandler_InvalidJSONBody(t *testing.T) {
 }
 
 func TestCreateUserHandler_ValidationErrorMapsTo400(t *testing.T) {
-	svc := application.NewCreateUserService(newFakeUserRepo())
+	svc := application.NewCreateUserService(newFakeUserRepo(), &fakeDefaultOrgBootstrapper{})
 	handler := httpadapter.CreateUserHandler(svc)
 
 	req := httptest.NewRequest("POST", "/api/v1/users", newReader([]byte(`{"username":"bob","email":"not-an-email","auth_source":"local","password":"hunter22"}`)))
@@ -57,7 +57,7 @@ func TestCreateUserHandler_ValidationErrorMapsTo400(t *testing.T) {
 }
 
 func TestCreateUserHandler_Succeeds(t *testing.T) {
-	svc := application.NewCreateUserService(newFakeUserRepo())
+	svc := application.NewCreateUserService(newFakeUserRepo(), &fakeDefaultOrgBootstrapper{})
 	handler := httpadapter.CreateUserHandler(svc)
 
 	req := httptest.NewRequest("POST", "/api/v1/users", newReader([]byte(`{"username":"bob","email":"bob@example.com","auth_source":"local","password":"hunter22"}`)))

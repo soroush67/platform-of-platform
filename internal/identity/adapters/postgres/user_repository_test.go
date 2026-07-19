@@ -210,3 +210,29 @@ func TestUserRepository_UpdatePasswordHash(t *testing.T) {
 		t.Errorf("expected the updated hash to persist, got %v", got.PasswordHash)
 	}
 }
+
+func TestUserRepository_Create_DuplicateUsernameRejected(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	repo := postgres.NewUserRepository(pool)
+
+	u1 := mustLocalUser(t)
+	if err := repo.Create(ctx, u1); err != nil {
+		t.Fatalf("Create (first): %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM users WHERE id = $1`, u1.ID) })
+
+	u2, err := domain.NewUser(u1.Username, "a-different-email-"+uuid.NewString()[:8]+"@example.com", domain.AuthSourceLocal)
+	if err != nil {
+		t.Fatalf("NewUser: %v", err)
+	}
+	if err := u2.SetPasswordHash("$2a$10$fakebcryptfakebcryptfakebcryptfakebcryptfakebcrypt"); err != nil {
+		t.Fatalf("SetPasswordHash: %v", err)
+	}
+
+	err = repo.Create(ctx, u2)
+	if !errors.Is(err, domain.ErrUserAlreadyExists) {
+		t.Fatalf("expected ErrUserAlreadyExists for a duplicate username, got: %v", err)
+	}
+}

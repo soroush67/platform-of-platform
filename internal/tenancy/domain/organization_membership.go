@@ -14,6 +14,13 @@ type OrganizationMembership struct {
 	OrganizationID string
 	UserID         string
 	JoinedAt       time.Time
+	// BlockedAt is nil when never blocked - operator-scoped "suspend
+	// this member's access to *this* organization only" (they stay a
+	// real platform User and keep working in any other org), same
+	// nullable-timestamp-as-real-state shape Organization.ArchivedAt
+	// already established. Set/cleared by BlockMemberService/
+	// UnblockMemberService.
+	BlockedAt *time.Time
 }
 
 func NewOrganizationMembership(organizationID, userID string) *OrganizationMembership {

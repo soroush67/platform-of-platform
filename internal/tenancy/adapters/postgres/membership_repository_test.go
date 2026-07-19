@@ -171,3 +171,109 @@ func TestMembershipRepository_IsMember_RecognizesServiceAccounts(t *testing.T) {
 		t.Error("expected a real ServiceAccount belonging to this org to count as a member")
 	}
 }
+
+func TestMembershipRepository_SetBlocked_ExcludesFromIsMember(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	orgRepo := tenancypg.NewOrganizationRepository(pool)
+	membershipRepo := tenancypg.NewMembershipRepository(pool)
+
+	actorID := insertUser(t, root)
+	memberID := insertUser(t, root)
+	org, _ := domain.NewOrganization("Block Test Org", "block-org-"+uuid.NewString()[:8])
+	if err := orgRepo.Create(ctx, org, actorID); err != nil {
+		t.Fatalf("Create org: %v", err)
+	}
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
+		mustExec(t, root, `DELETE FROM organization_memberships WHERE organization_id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
+	})
+
+	m := domain.NewOrganizationMembership(org.ID, memberID)
+	if err := membershipRepo.Create(ctx, m); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := membershipRepo.SetBlocked(ctx, org.ID, memberID, true); err != nil {
+		t.Fatalf("SetBlocked (true): %v", err)
+	}
+
+	// IsMember must now say false - the real mechanism every other
+	// permission check in the codebase relies on.
+	isMember, err := membershipRepo.IsMember(ctx, org.ID, memberID)
+	if err != nil {
+		t.Fatalf("IsMember (blocked): %v", err)
+	}
+	if isMember {
+		t.Error("expected IsMember to be false for a blocked member")
+	}
+
+	// But the row itself still exists, and the roster still shows them -
+	// ListByOrganization is deliberately unfiltered.
+	rows, err := membershipRepo.ListByOrganization(ctx, org.ID)
+	if err != nil {
+		t.Fatalf("ListByOrganization: %v", err)
+	}
+	if len(rows) != 1 || rows[0].BlockedAt == nil {
+		t.Errorf("expected the blocked member to still appear in the roster with BlockedAt set, got %+v", rows)
+	}
+
+	exists, err := membershipRepo.MembershipExists(ctx, org.ID, memberID)
+	if err != nil {
+		t.Fatalf("MembershipExists (blocked): %v", err)
+	}
+	if !exists {
+		t.Error("expected MembershipExists to stay true for a blocked member")
+	}
+
+	// Unblock - IsMember must recover.
+	if err := membershipRepo.SetBlocked(ctx, org.ID, memberID, false); err != nil {
+		t.Fatalf("SetBlocked (false): %v", err)
+	}
+	isMember, err = membershipRepo.IsMember(ctx, org.ID, memberID)
+	if err != nil {
+		t.Fatalf("IsMember (unblocked): %v", err)
+	}
+	if !isMember {
+		t.Error("expected IsMember to be true again after unblocking")
+	}
+}
+
+func TestMembershipRepository_Delete(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	orgRepo := tenancypg.NewOrganizationRepository(pool)
+	membershipRepo := tenancypg.NewMembershipRepository(pool)
+
+	actorID := insertUser(t, root)
+	memberID := insertUser(t, root)
+	org, _ := domain.NewOrganization("Remove Member Test Org", "remove-member-org-"+uuid.NewString()[:8])
+	if err := orgRepo.Create(ctx, org, actorID); err != nil {
+		t.Fatalf("Create org: %v", err)
+	}
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM outbox_events WHERE organization_id = $1`, org.ID)
+		mustExec(t, root, `DELETE FROM organization_memberships WHERE organization_id = $1`, org.ID)
+		dbtest.DeleteOrganization(t, root, org.ID)
+	})
+
+	m := domain.NewOrganizationMembership(org.ID, memberID)
+	if err := membershipRepo.Create(ctx, m); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := membershipRepo.Delete(ctx, org.ID, memberID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	exists, err := membershipRepo.MembershipExists(ctx, org.ID, memberID)
+	if err != nil {
+		t.Fatalf("MembershipExists: %v", err)
+	}
+	if exists {
+		t.Error("expected the membership row to be gone after Delete")
+	}
+}

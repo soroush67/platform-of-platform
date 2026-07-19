@@ -2,65 +2,39 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { useOrganizations } from "../api/hooks/useTenancy";
-import { useAuth } from "../auth/AuthContext";
 
-// OrgListPage is only ever actually seen by a non-platform-admin user
-// who belongs to zero or 2+ organizations - every other case redirects
-// straight past it:
-// - A platform admin never stops here at all, straight to /platform-admin
-//   (organization creation/management lives there now, not as a gate in
-//   front of the app).
-// - A regular user in exactly one organization goes straight into it -
-//   no "pick your one option" screen.
+// OrgListPage is never actually shown as a picker screen - it's a pure
+// redirect: login always lands straight inside a real organization's
+// own panel, never on an intermediate "choose one" page. Switching
+// between organizations happens via OrgLayout's own sidebar dropdown,
+// once already inside - that dropdown already covers what a picker
+// page would, so this component's only real job is "which org do I
+// send a freshly-logged-in user into." Prefers an active org over an
+// archived one if the user has both; falls back to the first one at
+// all only if every membership happens to be archived. The only case
+// with genuinely nothing to redirect to is zero memberships - shown a
+// plain message, not a page to navigate from.
 export function OrgListPage() {
   const { data, isLoading, error } = useOrganizations();
-  const { user } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (user?.is_platform_admin) {
-      navigate("/platform-admin", { replace: true });
-      return;
-    }
-    if (data && data.data.length === 1) {
-      navigate(`/orgs/${data.data[0].id}`, { replace: true });
-    }
-  }, [data, user, navigate]);
+    if (!data || data.data.length === 0) return;
+    const target = data.data.find((o) => o.status === "active") ?? data.data[0];
+    navigate(`/orgs/${target.id}`, { replace: true });
+  }, [data, navigate]);
+
+  if (isLoading || (data && data.data.length > 0)) {
+    return null;
+  }
 
   return (
     <div className="login-shell" style={{ flexDirection: "column", gap: 24 }}>
       <div className="card" style={{ width: 480 }}>
         <h1>Your organizations</h1>
-        {isLoading && <p className="muted">Loading…</p>}
         {error && <div className="error-banner">Failed to load organizations.</div>}
         {data && data.data.length === 0 && (
-          <p className="muted">
-            You aren't a member of any organization yet - ask a platform admin to add you to one.
-          </p>
-        )}
-        {data && data.data.length > 1 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Slug</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.data.map((org) => (
-                <tr key={org.id} style={{ cursor: "pointer" }} onClick={() => navigate(`/orgs/${org.id}`)}>
-                  <td>{org.name}</td>
-                  <td className="mono">{org.slug}</td>
-                  <td>
-                    <span className={`badge ${org.status === "archived" ? "badge-warning" : "badge-success"}`}>
-                      {org.status}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <p className="muted">You aren't a member of any organization yet - ask an admin to add you to one.</p>
         )}
       </div>
     </div>

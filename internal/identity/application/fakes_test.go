@@ -100,6 +100,41 @@ func (f *fakeUserRepo) SetPlatformAdmin(ctx context.Context, userID string, isAd
 	return nil
 }
 
+func (f *fakeUserRepo) Count(ctx context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.byID), nil
+}
+
+// fakeDefaultOrgBootstrapper records every call it receives - lets tests
+// assert both "was this called" (the first-user case) and "was this
+// NOT called" (every subsequent user).
+type fakeDefaultOrgBootstrapper struct {
+	mu      sync.Mutex
+	calls   []string
+	failErr error
+}
+
+func newFakeDefaultOrgBootstrapper() *fakeDefaultOrgBootstrapper {
+	return &fakeDefaultOrgBootstrapper{}
+}
+
+func (f *fakeDefaultOrgBootstrapper) BootstrapDefaultOrganization(ctx context.Context, ownerUserID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failErr != nil {
+		return f.failErr
+	}
+	f.calls = append(f.calls, ownerUserID)
+	return nil
+}
+
+func (f *fakeDefaultOrgBootstrapper) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
 type fakeRefreshTokenRepo struct {
 	mu     sync.Mutex
 	tokens map[string]*domain.RefreshToken // by hash

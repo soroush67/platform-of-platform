@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiFetch } from "../client";
-import type { ListResponse, Member, Organization, Project, Team } from "../types";
+import type { AvailableUser, ListResponse, Member, Organization, Project, Team, TeamMember } from "../types";
 
 export function useOrganizations() {
   return useQuery({
@@ -38,10 +38,48 @@ export function useArchiveOrganization(orgId: string) {
   });
 }
 
+// useArchiveOrganizationById is useArchiveOrganization's own sibling for
+// a page managing many organizations at once (PlatformAdminPage) rather
+// than one bound at mount time - the id is a mutate-time argument here
+// instead of a hook-construction one.
+export function useArchiveOrganizationById() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orgId: string) => apiFetch<Organization>(`/orgs/${orgId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs"] }),
+  });
+}
+
+// useDeleteOrganization hits POST /orgs/{id}/hard-delete - a genuinely
+// irreversible hard delete (backend calls OrganizationRepository.Purge
+// directly), NOT the soft-delete useArchiveOrganizationById above calls.
+// No response body (204) - unlike Archive/Create, there's no updated
+// Organization to hand back, the row is gone.
+export function useDeleteOrganization() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (orgId: string) => apiFetch<void>(`/orgs/${orgId}/hard-delete`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs"] }),
+  });
+}
+
 export function useMembers(orgId: string) {
   return useQuery({
     queryKey: ["orgs", orgId, "members"],
     queryFn: () => apiFetch<ListResponse<Member>>(`/orgs/${orgId}/members`),
+    enabled: !!orgId,
+  });
+}
+
+// useAvailableUsers backs the Members page's "add existing user" picker -
+// every platform User not already a member of this org (soroush's own
+// case: created once, never added to any org, invisible on every org's
+// roster and un-creatable a second time since usernames are platform-
+// global - this is how an admin gets them in without knowing their raw id).
+export function useAvailableUsers(orgId: string) {
+  return useQuery({
+    queryKey: ["orgs", orgId, "members", "available"],
+    queryFn: () => apiFetch<ListResponse<AvailableUser>>(`/orgs/${orgId}/members/available`),
     enabled: !!orgId,
   });
 }
@@ -51,6 +89,9 @@ export function useAddMember(orgId: string) {
   return useMutation({
     mutationFn: (userId: string) =>
       apiFetch<void>(`/orgs/${orgId}/members`, { method: "POST", body: JSON.stringify({ user_id: userId }) }),
+    // Prefix match (invalidateQueries' default) also catches
+    // ["orgs", orgId, "members", "available"] - the same user must
+    // disappear from the picker as it appears in the roster.
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
   });
 }
@@ -60,6 +101,35 @@ export function useChangeMemberRole(orgId: string) {
   return useMutation({
     mutationFn: ({ userId, role }: { userId: string; role: string }) =>
       apiFetch<void>(`/orgs/${orgId}/members/${userId}/role`, { method: "PUT", body: JSON.stringify({ role }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
+  });
+}
+
+// useBlockMember/useUnblockMember - per-organization suspension only
+// (see Member's own "blocked" field comment).
+export function useBlockMember(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => apiFetch<void>(`/orgs/${orgId}/members/${userId}/block`, { method: "PUT" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
+  });
+}
+
+export function useUnblockMember(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => apiFetch<void>(`/orgs/${orgId}/members/${userId}/unblock`, { method: "PUT" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
+  });
+}
+
+// useRemoveMember - a real, permanent removal of this membership (the
+// long-flagged gap, finally closed) - the User account itself is
+// untouched.
+export function useRemoveMember(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) => apiFetch<void>(`/orgs/${orgId}/members/${userId}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "members"] }),
   });
 }
@@ -106,19 +176,58 @@ export function useCreateTeam(orgId: string) {
   });
 }
 
+// useUpdateTeam - a rename, nothing else (Team has no other mutable
+// field).
+export function useUpdateTeam(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ teamId, name }: { teamId: string; name: string }) =>
+      apiFetch<Team>(`/orgs/${orgId}/teams/${teamId}`, { method: "PUT", body: JSON.stringify({ name }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "teams"] }),
+  });
+}
+
+// useDeleteTeam - a real, permanent removal: the Team, its own
+// memberships, and every RoleBinding granted to it.
+export function useDeleteTeam(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (teamId: string) => apiFetch<void>(`/orgs/${orgId}/teams/${teamId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "teams"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "role-bindings"] });
+    },
+  });
+}
+
+// useTeamMembers is the real per-Team roster TeamsPage.tsx was missing -
+// without it, "Add member" had no visible confirmation and "Remove
+// member" was a blind guess from the org-wide member list.
+export function useTeamMembers(orgId: string, teamId: string) {
+  return useQuery({
+    queryKey: ["orgs", orgId, "teams", teamId, "members"],
+    queryFn: () => apiFetch<ListResponse<TeamMember>>(`/orgs/${orgId}/teams/${teamId}/members`),
+    enabled: !!orgId && !!teamId,
+  });
+}
+
 export function useAddTeamMember(orgId: string, teamId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) =>
       apiFetch<void>(`/orgs/${orgId}/teams/${teamId}/members`, {
         method: "POST",
         body: JSON.stringify({ user_id: userId }),
       }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "teams", teamId, "members"] }),
   });
 }
 
 export function useRemoveTeamMember(orgId: string, teamId: string) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: string) =>
       apiFetch<void>(`/orgs/${orgId}/teams/${teamId}/members/${userId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "teams", teamId, "members"] }),
   });
 }

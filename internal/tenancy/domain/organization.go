@@ -58,6 +58,14 @@ var ErrOrganizationAlreadyArchived = errors.New("organization is already archive
 // execution's own ErrWorkspaceLocked, mapped to 409, not 403/400).
 var ErrOrganizationArchived = errors.New("organization is archived")
 
+// ErrOrganizationSlugTaken - organizations.slug is globally unique
+// (migrations/0001_init.up.sql) - a duplicate slug surfaces as a real
+// Postgres unique violation (OrganizationRepository.Create catches
+// pgErr.Code == "23505"), same pattern as RBAC's own
+// domain.ErrRoleAlreadyExists, mapped to HTTP 409 at the adapter
+// boundary instead of falling through to a generic 500.
+var ErrOrganizationSlugTaken = errors.New("an organization with this slug already exists")
+
 // Organization is the Tenancy context's aggregate root - top of the
 // containment hierarchy every other aggregate resolves to
 // (docs/architecture/03-domain-model.md §2). Status/ArchivedAt implement

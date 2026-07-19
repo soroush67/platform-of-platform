@@ -39,6 +39,10 @@ func writeTeamError(w http.ResponseWriter, err error, notFoundMessage string) {
 		httpserver.WriteProblem(w, http.StatusNotFound, notFoundMessage, "")
 		return
 	}
+	if errors.Is(err, domain.ErrTeamAlreadyExists) {
+		httpserver.WriteProblem(w, http.StatusConflict, "team already exists", err.Error())
+		return
+	}
 	httpserver.WriteProblem(w, http.StatusInternalServerError, "internal error", "")
 }
 
@@ -70,6 +74,68 @@ func CreateTeamHandler(svc *application.CreateTeamService) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(toTeamResponse(team))
+	}
+}
+
+type updateTeamRequest struct {
+	Name string `json:"name"`
+}
+
+// UpdateTeamHandler implements PUT /api/v1/orgs/{id}/teams/{team} - a
+// rename.
+func UpdateTeamHandler(svc *application.UpdateTeamService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req updateTeamRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		team, err := svc.Execute(r.Context(), application.UpdateTeamInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			TeamID:           r.PathValue("team"),
+			Name:             req.Name,
+		})
+		if err != nil {
+			writeTeamError(w, err, "team not found")
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(toTeamResponse(team))
+	}
+}
+
+// DeleteTeamHandler implements DELETE /api/v1/orgs/{id}/teams/{team} - a
+// real, permanent removal (the Team, its memberships, and every
+// RoleBinding granted to it).
+func DeleteTeamHandler(svc *application.DeleteTeamService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.DeleteTeamInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			TeamID:           r.PathValue("team"),
+		})
+		if err != nil {
+			writeTeamError(w, err, "team not found")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -132,6 +198,49 @@ func AddTeamMemberHandler(svc *application.AddTeamMemberService) http.HandlerFun
 		}
 
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type teamMemberResponse struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	JoinedAt string `json:"joined_at"`
+}
+
+func toTeamMemberResponse(m application.TeamMemberSummary) teamMemberResponse {
+	return teamMemberResponse{
+		UserID:   m.UserID,
+		Username: m.Username,
+		Email:    m.Email,
+		JoinedAt: m.JoinedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+// ListTeamMembersHandler implements
+// GET /api/v1/orgs/{id}/teams/{team}/members - the real roster
+// TeamsPage.tsx was missing (see list_team_members.go's own comment).
+func ListTeamMembersHandler(svc *application.ListTeamMembersService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		members, err := svc.Execute(r.Context(), r.PathValue("id"), r.PathValue("team"), userID)
+		if err != nil {
+			writeTeamError(w, err, "team not found")
+			return
+		}
+
+		responses := make([]teamMemberResponse, 0, len(members))
+		for _, m := range members {
+			responses = append(responses, toTeamMemberResponse(m))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
 	}
 }
 

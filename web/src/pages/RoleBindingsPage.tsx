@@ -1,8 +1,9 @@
 import { useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 
-import { useCreateRoleBinding, useRoleBindings, useRoles } from "../api/hooks/useRbac";
-import { useMembers, useTeams } from "../api/hooks/useTenancy";
+import { useCreateRoleBinding, useDeleteRoleBinding, useRoleBindings, useRoles } from "../api/hooks/useRbac";
+import { useMembers, useOrganization, useProjects, useTeams } from "../api/hooks/useTenancy";
+import { useWorkspaces } from "../api/hooks/useWorkspace";
 
 export function RoleBindingsPage() {
   const { orgId = "" } = useParams();
@@ -10,15 +11,36 @@ export function RoleBindingsPage() {
   const { data: roles } = useRoles(orgId);
   const { data: members } = useMembers(orgId);
   const { data: teams } = useTeams(orgId);
+  const { data: org } = useOrganization(orgId);
   const createBinding = useCreateRoleBinding(orgId);
+  const deleteBinding = useDeleteRoleBinding(orgId);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function onDelete(bindingId: string) {
+    setDeleteError(null);
+    try {
+      await deleteBinding.mutateAsync(bindingId);
+      setConfirmingId(null);
+    } catch {
+      setDeleteError("Failed to delete role binding.");
+    }
+  }
 
   const [roleId, setRoleId] = useState("");
   const [subjectType, setSubjectType] = useState("user");
   const [subjectId, setSubjectId] = useState("");
   const [scopeType, setScopeType] = useState("organization");
   const [scopeId, setScopeId] = useState("");
+  // scopeProjectId is only used to narrow the Workspace dropdown below
+  // to one Project's own workspaces - it isn't submitted itself
+  // (scopeId, set from that dropdown's own selection, is what's sent).
+  const [scopeProjectId, setScopeProjectId] = useState("");
   const [effect, setEffect] = useState("allow");
   const [formError, setFormError] = useState<string | null>(null);
+
+  const { data: projects } = useProjects(orgId);
+  const { data: workspaces } = useWorkspaces(orgId, scopeProjectId);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -32,6 +54,7 @@ export function RoleBindingsPage() {
       });
       setSubjectId("");
       setScopeId("");
+      setScopeProjectId("");
     } catch {
       setFormError("Failed to create role binding.");
     }
@@ -44,6 +67,7 @@ export function RoleBindingsPage() {
       </div>
 
       {isLoading && <p className="muted">Loading…</p>}
+      {deleteError && <div className="error-banner">{deleteError}</div>}
       {bindings && (
         <table>
           <thead>
@@ -52,28 +76,50 @@ export function RoleBindingsPage() {
               <th>Subject</th>
               <th>Scope</th>
               <th>Effect</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
-            {bindings.data.map((b) => (
-              <tr key={b.id}>
-                <td className="mono">{b.role_id}</td>
-                <td className="mono">
-                  {b.subject_type}:{b.subject_id}
-                </td>
-                <td className="mono">
-                  {b.scope_type}:{b.scope_id}
-                </td>
-                <td>
-                  <span className={`badge ${b.effect === "deny" ? "badge-danger" : "badge-success"}`}>
-                    {b.effect}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {bindings.data.map((b) => {
+              const scopeName = b.scope_type === "organization" ? org?.name : b.scope_name;
+              return (
+                <tr key={b.id}>
+                  <td>{b.role_name || <span className="mono">{b.role_id}</span>}</td>
+                  <td>
+                    {b.subject_name || <span className="mono">{b.subject_id}</span>}{" "}
+                    <span className="muted">({b.subject_type})</span>
+                  </td>
+                  <td>
+                    {scopeName || <span className="mono">{b.scope_id}</span>}{" "}
+                    <span className="muted">({b.scope_type})</span>
+                  </td>
+                  <td>
+                    <span className={`badge ${b.effect === "deny" ? "badge-danger" : "badge-success"}`}>
+                      {b.effect}
+                    </span>
+                  </td>
+                  <td>
+                    {confirmingId === b.id ? (
+                      <>
+                        <button className="danger" onClick={() => onDelete(b.id)} disabled={deleteBinding.isPending}>
+                          Confirm delete
+                        </button>{" "}
+                        <button className="secondary" onClick={() => setConfirmingId(null)}>
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button className="danger" onClick={() => setConfirmingId(b.id)}>
+                        Delete
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
             {bindings.data.length === 0 && (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={5} className="muted">
                   No role bindings yet.
                 </td>
               </tr>
@@ -148,17 +194,64 @@ export function RoleBindingsPage() {
           <div className="field-row">
             <label>
               Scope type
-              <select value={scopeType} onChange={(e) => setScopeType(e.target.value)}>
+              <select
+                value={scopeType}
+                onChange={(e) => {
+                  setScopeType(e.target.value);
+                  setScopeId("");
+                  setScopeProjectId("");
+                }}
+              >
                 <option value="organization">organization</option>
                 <option value="project">project</option>
                 <option value="workspace">workspace</option>
               </select>
             </label>
-            {scopeType !== "organization" && (
+            {scopeType === "project" && (
               <label>
-                Scope ID
-                <input value={scopeId} onChange={(e) => setScopeId(e.target.value)} required />
+                Project
+                <select value={scopeId} onChange={(e) => setScopeId(e.target.value)} required>
+                  <option value="">— choose —</option>
+                  {projects?.data.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
               </label>
+            )}
+            {scopeType === "workspace" && (
+              <>
+                <label>
+                  Project
+                  <select
+                    value={scopeProjectId}
+                    onChange={(e) => {
+                      setScopeProjectId(e.target.value);
+                      setScopeId("");
+                    }}
+                    required
+                  >
+                    <option value="">— choose —</option>
+                    {projects?.data.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Workspace
+                  <select value={scopeId} onChange={(e) => setScopeId(e.target.value)} required disabled={!scopeProjectId}>
+                    <option value="">— choose —</option>
+                    {workspaces?.data.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
             )}
           </div>
           <label>

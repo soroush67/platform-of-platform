@@ -132,6 +132,18 @@ func (f *fakeUserRepo) SetPlatformAdmin(ctx context.Context, userID string, isAd
 	return nil
 }
 
+func (f *fakeUserRepo) Count(ctx context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.users), nil
+}
+
+type fakeDefaultOrgBootstrapper struct{}
+
+func (f *fakeDefaultOrgBootstrapper) BootstrapDefaultOrganization(ctx context.Context, ownerUserID string) error {
+	return nil
+}
+
 type fakeRefreshTokenRepo struct {
 	mu     sync.Mutex
 	tokens map[string]*domain.RefreshToken

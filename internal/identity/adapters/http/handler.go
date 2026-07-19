@@ -52,6 +52,10 @@ func CreateUserHandler(svc *application.CreateUserService) http.HandlerFunc {
 				httpserver.WriteProblem(w, http.StatusBadRequest, "validation failed", validationErr.Error())
 				return
 			}
+			if errors.Is(err, domain.ErrUserAlreadyExists) {
+				httpserver.WriteProblem(w, http.StatusConflict, "user already exists", err.Error())
+				return
+			}
 			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to create user", "")
 			return
 		}

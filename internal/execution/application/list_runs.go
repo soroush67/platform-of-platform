@@ -6,16 +6,20 @@ import (
 	"platform-of-platform/internal/execution/domain"
 )
 
-// ListRunsService - membership-gated only, any role (same as every
-// other read in this codebase).
+// ListRunsService - gated by canAccessWorkspace (project_visibility.go)
+// since this session's per-project visibility change - previously
+// membership-only, any role (same as every other read in this
+// codebase).
 type ListRunsService struct {
-	runRepo          RunRepository
-	membership       MembershipChecker
-	workspaceChecker WorkspaceChecker
+	runRepo           RunRepository
+	membership        MembershipChecker
+	workspaceChecker  WorkspaceChecker
+	permChecker       PermissionChecker
+	visibilityChecker VisibilityChecker
 }
 
-func NewListRunsService(runRepo RunRepository, membership MembershipChecker, workspaceChecker WorkspaceChecker) *ListRunsService {
-	return &ListRunsService{runRepo: runRepo, membership: membership, workspaceChecker: workspaceChecker}
+func NewListRunsService(runRepo RunRepository, membership MembershipChecker, workspaceChecker WorkspaceChecker, permChecker PermissionChecker, visibilityChecker VisibilityChecker) *ListRunsService {
+	return &ListRunsService{runRepo: runRepo, membership: membership, workspaceChecker: workspaceChecker, permChecker: permChecker, visibilityChecker: visibilityChecker}
 }
 
 func (s *ListRunsService) Execute(ctx context.Context, organizationID, projectID, workspaceID, requestingUserID string) ([]*domain.Run, error) {
@@ -33,6 +37,14 @@ func (s *ListRunsService) Execute(ctx context.Context, organizationID, projectID
 	}
 	if !exists {
 		return nil, domain.ErrWorkspaceNotFound
+	}
+
+	canAccess, err := canAccessWorkspace(ctx, s.permChecker, s.visibilityChecker, organizationID, requestingUserID, projectID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if !canAccess {
+		return nil, domain.ErrForbidden
 	}
 
 	return s.runRepo.ListByWorkspace(ctx, organizationID, workspaceID)

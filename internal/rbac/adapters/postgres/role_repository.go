@@ -93,6 +93,46 @@ func (r *RoleRepository) Create(ctx context.Context, role *domain.Role) error {
 	return tx.Commit(ctx)
 }
 
+// Update rewrites a custom Role's permission set in place -
+// UpdateRoleService already rejects a builtin Role (organization_id
+// nil) before this is ever called, but the WHERE clause's own
+// organization_id = $3 is the real, second enforcement point (defense
+// in depth, same reasoning every other org-scoped write in this
+// codebase already applies) - a caller passing a builtin Role's id
+// would match zero rows here, not silently rewrite the wrong thing.
+// Name is deliberately not updatable - avoids the rename/unique-
+// conflict case Create's own INSERT has to handle.
+func (r *RoleRepository) Update(ctx context.Context, role *domain.Role) error {
+	if role.OrganizationID == nil {
+		return &domain.ValidationError{Message: "built-in roles cannot be updated"}
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, *role.OrganizationID); err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(role.Permissions)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx,
+		`UPDATE roles SET permissions = $1 WHERE id = $2 AND organization_id = $3`,
+		encoded, role.ID, *role.OrganizationID,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 // ListForOrganization returns every Role visible to this org - built-in
 // (organization_id IS NULL, visible everywhere per roles_isolation's own
 // RLS policy) plus this org's own custom ones - matching

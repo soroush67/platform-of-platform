@@ -141,11 +141,72 @@ func TestCreateRoleBindingService_RoleFromAnotherOrgRejected(t *testing.T) {
 	}
 }
 
-func TestListRoleBindingsService_RequiresMembership(t *testing.T) {
+func setupListRoleBindingsService(t *testing.T) (*application.ListRoleBindingsService, *fakeMembershipChecker, *fakeRoleRepo, *fakeRoleBindingRepo, *fakeUserReader, *fakeNameReader) {
+	t.Helper()
 	membership := newFakeMembershipChecker()
-	svc := application.NewListRoleBindingsService(newFakeRoleBindingRepo(), membership)
+	roleRepo := newFakeRoleRepo()
+	bindingRepo := newFakeRoleBindingRepo()
+	userReader := newFakeUserReader()
+	nameReader := newFakeNameReader()
+	svc := application.NewListRoleBindingsService(bindingRepo, membership, roleRepo, userReader, nameReader, nameReader, nameReader, nameReader)
+	return svc, membership, roleRepo, bindingRepo, userReader, nameReader
+}
+
+func TestListRoleBindingsService_RequiresMembership(t *testing.T) {
+	svc, _, _, _, _, _ := setupListRoleBindingsService(t)
 
 	if _, err := svc.Execute(context.Background(), testOrgID, "", "stranger"); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("expected ErrForbidden for a non-member, got: %v", err)
+	}
+}
+
+func TestListRoleBindingsService_ResolvesDisplayNames(t *testing.T) {
+	svc, membership, roleRepo, bindingRepo, userReader, nameReader := setupListRoleBindingsService(t)
+	membership.add(testOrgID, "requester")
+
+	role, _ := domain.NewRole(testOrgID, "deployer", []domain.Permission{domain.PermissionWorkspaceApply})
+	roleRepo.put(role)
+	userReader.set("user-1", "alice", "alice@example.com")
+	nameReader.set(testOrgID, "project-1", "My Project")
+
+	binding := domain.NewRoleBinding(testOrgID, role.ID, domain.SubjectTypeUser, "user-1", domain.ScopeTypeProject, "project-1", domain.EffectAllow)
+	if err := bindingRepo.Create(context.Background(), binding); err != nil {
+		t.Fatalf("Create binding: %v", err)
+	}
+
+	got, err := svc.Execute(context.Background(), testOrgID, "", "requester")
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 binding, got %d", len(got))
+	}
+	summary := got[0]
+	if summary.RoleName != "deployer" || summary.SubjectName != "alice" || summary.ScopeName != "My Project" {
+		t.Errorf("expected resolved role/subject/scope names, got %+v", summary)
+	}
+}
+
+func TestListRoleBindingsService_UnresolvableNameStaysEmptyNotError(t *testing.T) {
+	svc, membership, roleRepo, bindingRepo, _, _ := setupListRoleBindingsService(t)
+	membership.add(testOrgID, "requester")
+
+	role, _ := domain.NewRole(testOrgID, "deployer", []domain.Permission{domain.PermissionWorkspaceApply})
+	roleRepo.put(role)
+
+	// A team subject with no matching fakeNameReader entry - a
+	// since-deleted Team, or one this fake just never had set - must
+	// show up as an empty name, not fail the whole list.
+	binding := domain.NewRoleBinding(testOrgID, role.ID, domain.SubjectTypeTeam, "team-gone", domain.ScopeTypeOrganization, testOrgID, domain.EffectAllow)
+	if err := bindingRepo.Create(context.Background(), binding); err != nil {
+		t.Fatalf("Create binding: %v", err)
+	}
+
+	got, err := svc.Execute(context.Background(), testOrgID, "", "requester")
+	if err != nil {
+		t.Fatalf("expected no error even though the team can't be resolved, got: %v", err)
+	}
+	if len(got) != 1 || got[0].SubjectName != "" {
+		t.Errorf("expected an empty (not failing) subject name, got %+v", got)
 	}
 }

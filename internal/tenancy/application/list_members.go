@@ -20,6 +20,12 @@ type MemberSummary struct {
 	Email    string
 	RoleName string
 	JoinedAt time.Time
+	// Blocked - true when this membership has been suspended for this
+	// organization only (BlockMemberService) - the roster deliberately
+	// still includes a blocked member (MembershipRepository.
+	// ListByOrganization is unfiltered) so an admin can see and unblock
+	// them.
+	Blocked bool
 }
 
 // ListMembersService implements `GET /api/v1/orgs/{org}/members` - same
@@ -69,6 +75,7 @@ func (s *ListMembersService) Execute(ctx context.Context, organizationID, reques
 			Email:    email,
 			RoleName: roleName,
 			JoinedAt: m.JoinedAt,
+			Blocked:  m.BlockedAt != nil,
 		})
 	}
 

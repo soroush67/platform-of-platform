@@ -197,6 +197,52 @@ func (f *fakeScopedPermissionChecker) grant(orgID, userID, permission string) {
 	f.perms[orgID+"|"+userID+"|"+permission] = true
 }
 
+// fakePermissionChecker/fakeVisibilityChecker back the new
+// PermissionChecker/VisibilityChecker ports (project_visibility.go) -
+// same shape as the application-layer tests' own copies (a different
+// package, can't share the type directly).
+type fakePermissionChecker struct {
+	mu    sync.Mutex
+	perms map[string]bool
+}
+
+func newFakePermissionChecker() *fakePermissionChecker {
+	return &fakePermissionChecker{perms: map[string]bool{}}
+}
+
+func (f *fakePermissionChecker) HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.perms[organizationID+"|"+userID+"|"+permission], nil
+}
+
+func (f *fakePermissionChecker) grant(orgID, userID, permission string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.perms[orgID+"|"+userID+"|"+permission] = true
+}
+
+type fakeVisibilityChecker struct {
+	mu     sync.Mutex
+	grants map[string]bool
+}
+
+func newFakeVisibilityChecker() *fakeVisibilityChecker {
+	return &fakeVisibilityChecker{grants: map[string]bool{}}
+}
+
+func (f *fakeVisibilityChecker) HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.grants[organizationID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID], nil
+}
+
+func (f *fakeVisibilityChecker) grant(orgID, userID, permission, scopeType, scopeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[orgID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID] = true
+}
+
 type fakeOrganizationChecker struct {
 	mu       sync.Mutex
 	archived map[string]bool

@@ -1,9 +1,18 @@
 import { useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 
-import { useAddMember, useChangeMemberRole, useMembers } from "../api/hooks/useTenancy";
+import {
+  useAddMember,
+  useAvailableUsers,
+  useBlockMember,
+  useChangeMemberRole,
+  useMembers,
+  useOrganization,
+  useRemoveMember,
+  useUnblockMember,
+} from "../api/hooks/useTenancy";
 import { useCreateUser } from "../api/hooks/useIdentity";
-import { ROLE_NAMES, type RoleName } from "../api/types";
+import { ApiError, ROLE_NAMES, type Member, type RoleName } from "../api/types";
 
 // MemberRoleSelect is the roster table's own inline "change role" action -
 // acts on a known user_id (unlike the old free-text-by-ID form this
@@ -43,12 +52,154 @@ function MemberRoleSelect({ orgId, userId, currentRole }: { orgId: string; userI
   );
 }
 
+// MemberRowActions - Block/Unblock (per-organization suspension only,
+// see Member's own "blocked" field comment) and Remove (a real,
+// permanent removal of this membership - the User account itself is
+// untouched), in the same row the member is listed in.
+function MemberRowActions({ orgId, member }: { orgId: string; member: Member }) {
+  const blockMember = useBlockMember(orgId);
+  const unblockMember = useUnblockMember(orgId);
+  const removeMember = useRemoveMember(orgId);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onToggleBlock() {
+    setError(null);
+    try {
+      if (member.blocked) {
+        await unblockMember.mutateAsync(member.user_id);
+      } else {
+        await blockMember.mutateAsync(member.user_id);
+      }
+    } catch {
+      setError(member.blocked ? "Failed to unblock member." : "Failed to block member.");
+    }
+  }
+
+  async function onRemove() {
+    setError(null);
+    try {
+      await removeMember.mutateAsync(member.user_id);
+    } catch {
+      setError("Failed to remove member.");
+    }
+  }
+
+  return (
+    <div>
+      <div className="field-row">
+        <button
+          className="secondary"
+          disabled={blockMember.isPending || unblockMember.isPending}
+          onClick={onToggleBlock}
+        >
+          {member.blocked ? "Unblock" : "Block"}
+        </button>
+        {confirmingRemove ? (
+          <>
+            <button className="danger" disabled={removeMember.isPending} onClick={onRemove}>
+              Confirm remove
+            </button>
+            <button className="secondary" onClick={() => setConfirmingRemove(false)}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button className="danger" onClick={() => setConfirmingRemove(true)}>
+            Remove
+          </button>
+        )}
+      </div>
+      {error && <div className="error-banner">{error}</div>}
+    </div>
+  );
+}
+
+// AddExistingUserCard - the picker for a platform User that already
+// exists (created here or in another org, or left orphaned by a prior
+// "create user & add" whose add-to-org step failed) but isn't a member
+// of this org yet. Without this, the only way in was "create user"
+// (which 409s on an existing username with no recovery) or manually
+// knowing the target's raw user_id.
+function AddExistingUserCard({ orgId, orgName }: { orgId: string; orgName: string }) {
+  const { data: available, isLoading } = useAvailableUsers(orgId);
+  const addMember = useAddMember(orgId);
+  const changeRole = useChangeMemberRole(orgId);
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [role, setRole] = useState<RoleName>("read");
+  const [error, setError] = useState<string | null>(null);
+
+  async function onAdd(e: FormEvent) {
+    e.preventDefault();
+    if (!selectedUserId) return;
+    setError(null);
+    try {
+      await addMember.mutateAsync(selectedUserId);
+      if (role !== "read") {
+        await changeRole.mutateAsync({ userId: selectedUserId, role });
+      }
+      setSelectedUserId("");
+      setRole("read");
+    } catch {
+      setError("Failed to add this user to the org.");
+    }
+  }
+
+  if (!isLoading && available && available.data.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="card" style={{ marginTop: 20, maxWidth: 480 }}>
+      <h3>Add existing user to {orgName}</h3>
+      <p className="muted">
+        Platform users who aren&apos;t members of this org yet - including any user already created (here or
+        elsewhere) but never added to this org.
+      </p>
+      {isLoading && <p className="muted">Loading…</p>}
+      {available && (
+        <form onSubmit={onAdd}>
+          <label>
+            User
+            <select value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} required>
+              <option value="" disabled>
+                Select a user…
+              </option>
+              {available.data.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.username} ({u.email})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Role
+            <select value={role} onChange={(e) => setRole(e.target.value as RoleName)}>
+              {ROLE_NAMES.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={!selectedUserId || addMember.isPending || changeRole.isPending}>
+            Add to {orgName}
+          </button>
+        </form>
+      )}
+      {error && <div className="error-banner">{error}</div>}
+    </div>
+  );
+}
+
 export function MembersPage() {
   const { orgId = "" } = useParams();
+  const { data: org } = useOrganization(orgId);
   const { data: members, isLoading } = useMembers(orgId);
   const createUser = useCreateUser();
   const addMember = useAddMember(orgId);
   const changeRole = useChangeMemberRole(orgId);
+  const orgName = org?.name || "this org";
 
   // ---- Create user & add to this org ----
   const [newUsername, setNewUsername] = useState("");
@@ -89,8 +240,12 @@ export function MembersPage() {
         setOrphanedUserId(user.id);
         setCreateError(`User ${user.username} was created but could not be added to this org.`);
       }
-    } catch {
-      setCreateError("Failed to create user.");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        setCreateError(`A user named "${newUsername}" already exists - use "Add existing user" above instead.`);
+      } else {
+        setCreateError(err instanceof ApiError ? err.detail || err.message : "Failed to create user.");
+      }
     }
   }
 
@@ -106,14 +261,10 @@ export function MembersPage() {
     }
   }
 
-  // ---- Add existing user by ID ----
-  const [existingUserId, setExistingUserId] = useState("");
-  const [existingResult, setExistingResult] = useState<string | null>(null);
-
   return (
     <div>
       <div className="page-header">
-        <h1>Members</h1>
+        <h1>Members of {orgName}</h1>
       </div>
 
       {isLoading && <p className="muted">Loading…</p>}
@@ -125,22 +276,29 @@ export function MembersPage() {
               <th>Email</th>
               <th>Role</th>
               <th>Joined</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
             {members.data.map((m) => (
               <tr key={m.user_id}>
-                <td>{m.username || <span className="mono">{m.user_id}</span>}</td>
+                <td>
+                  {m.username || <span className="mono">{m.user_id}</span>}{" "}
+                  {m.blocked && <span className="badge badge-warning">blocked</span>}
+                </td>
                 <td>{m.email}</td>
                 <td>
                   <MemberRoleSelect orgId={orgId} userId={m.user_id} currentRole={m.role_name} />
                 </td>
                 <td className="muted">{new Date(m.joined_at).toLocaleDateString()}</td>
+                <td>
+                  <MemberRowActions orgId={orgId} member={m} />
+                </td>
               </tr>
             ))}
             {members.data.length === 0 && (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={5} className="muted">
                   No members yet.
                 </td>
               </tr>
@@ -149,8 +307,14 @@ export function MembersPage() {
         </table>
       )}
 
+      <AddExistingUserCard orgId={orgId} orgName={orgName} />
+
       <div className="card" style={{ marginTop: 20, maxWidth: 480 }}>
-        <h3>Create user &amp; add to this org</h3>
+        <h3>Create new user &amp; add to {orgName}</h3>
+        <p className="muted">
+          For a user who doesn&apos;t exist on the platform yet. If they already have an account, use &quot;Add
+          existing user&quot; above instead - usernames are unique platform-wide, so creating one again will fail.
+        </p>
         {createError && <div className="error-banner">{createError}</div>}
         {createSuccess && <p className="muted">{createSuccess}</p>}
         {orphanedUserId ? (
@@ -186,36 +350,6 @@ export function MembersPage() {
             </button>
           </form>
         )}
-      </div>
-
-      <div className="card" style={{ marginTop: 20, maxWidth: 480 }}>
-        <h3>Add existing user by ID</h3>
-        <p className="muted">
-          For a user already created elsewhere (another org, or directly via the API) - there&apos;s no cross-org
-          user search in this system yet, so this is the only way to attach a known user id to this org.
-        </p>
-        {existingResult && <div className="error-banner">{existingResult}</div>}
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setExistingResult(null);
-            try {
-              await addMember.mutateAsync(existingUserId);
-              setExistingResult("Added.");
-              setExistingUserId("");
-            } catch {
-              setExistingResult("Failed to add member.");
-            }
-          }}
-        >
-          <label>
-            User ID
-            <input value={existingUserId} onChange={(e) => setExistingUserId(e.target.value)} required />
-          </label>
-          <button type="submit" disabled={addMember.isPending}>
-            Add
-          </button>
-        </form>
       </div>
     </div>
   );

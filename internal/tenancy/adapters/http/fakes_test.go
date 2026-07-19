@@ -172,8 +172,38 @@ func (f *fakeMembershipRepo) Create(ctx context.Context, m *domain.OrganizationM
 func (f *fakeMembershipRepo) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	m, ok := f.members[organizationID+"|"+userID]
+	return ok && m.BlockedAt == nil, nil
+}
+
+func (f *fakeMembershipRepo) MembershipExists(ctx context.Context, organizationID, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	_, ok := f.members[organizationID+"|"+userID]
 	return ok, nil
+}
+
+func (f *fakeMembershipRepo) SetBlocked(ctx context.Context, organizationID, userID string, blocked bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.members[organizationID+"|"+userID]
+	if !ok {
+		return nil
+	}
+	if blocked {
+		now := time.Now()
+		m.BlockedAt = &now
+	} else {
+		m.BlockedAt = nil
+	}
+	return nil
+}
+
+func (f *fakeMembershipRepo) Delete(ctx context.Context, organizationID, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.members, organizationID+"|"+userID)
+	return nil
 }
 
 func (f *fakeMembershipRepo) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.OrganizationMembership, error) {
@@ -215,6 +245,18 @@ func (f *fakeUserReader) GetUser(ctx context.Context, userID string) (string, st
 		return "", "", false, nil
 	}
 	return u[0], u[1], true, nil
+}
+
+// ListAll backs ListAvailableUsersHandler's own tests - same map-backed
+// style as GetUser above.
+func (f *fakeUserReader) ListAll(ctx context.Context) ([]struct{ ID, Username, Email string }, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]struct{ ID, Username, Email string }, 0, len(f.users))
+	for id, u := range f.users {
+		out = append(out, struct{ ID, Username, Email string }{ID: id, Username: u[0], Email: u[1]})
+	}
+	return out, nil
 }
 
 func (f *fakeUserReader) set(userID, username, email string) {
@@ -281,6 +323,30 @@ func (f *fakePermissionChecker) grant(orgID, userID, permission string) {
 	f.perms[orgID+"|"+userID+"|"+permission] = true
 }
 
+// fakeVisibilityChecker backs the new VisibilityChecker port
+// (project_visibility.go) - same shape as the application-layer tests'
+// own copy (a different package, can't share the type directly).
+type fakeVisibilityChecker struct {
+	mu     sync.Mutex
+	grants map[string]bool
+}
+
+func newFakeVisibilityChecker() *fakeVisibilityChecker {
+	return &fakeVisibilityChecker{grants: map[string]bool{}}
+}
+
+func (f *fakeVisibilityChecker) HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.grants[organizationID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID], nil
+}
+
+func (f *fakeVisibilityChecker) grant(orgID, userID, permission, scopeType, scopeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[orgID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID] = true
+}
+
 type fakeProjectRepo struct {
 	mu       sync.Mutex
 	projects map[string]*domain.Project
@@ -332,11 +398,11 @@ func (f *fakeProjectRepo) put(p *domain.Project) {
 type fakeTeamRepo struct {
 	mu          sync.Mutex
 	teams       map[string]*domain.Team
-	memberships map[string]bool
+	memberships map[string]*domain.TeamMembership
 }
 
 func newFakeTeamRepo() *fakeTeamRepo {
-	return &fakeTeamRepo{teams: map[string]*domain.Team{}, memberships: map[string]bool{}}
+	return &fakeTeamRepo{teams: map[string]*domain.Team{}, memberships: map[string]*domain.TeamMembership{}}
 }
 
 func (f *fakeTeamRepo) Create(ctx context.Context, team *domain.Team) error {
@@ -350,8 +416,25 @@ func (f *fakeTeamRepo) Create(ctx context.Context, team *domain.Team) error {
 func (f *fakeTeamRepo) AddMember(ctx context.Context, m *domain.TeamMembership) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.memberships[m.TeamID+"|"+m.UserID] = true
+	cp := *m
+	f.memberships[m.TeamID+"|"+m.UserID] = &cp
 	return nil
+}
+
+// ListMembers backs ListTeamMembersService's own new roster endpoint -
+// same shape as the application-layer tests' own copy (a different
+// package, can't share the type directly).
+func (f *fakeTeamRepo) ListMembers(ctx context.Context, organizationID, teamID string) ([]*domain.TeamMembership, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*domain.TeamMembership
+	for _, m := range f.memberships {
+		if m.TeamID == teamID && m.OrganizationID == organizationID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeTeamRepo) RemoveMember(ctx context.Context, organizationID, teamID, userID string) error {
@@ -390,4 +473,36 @@ func (f *fakeTeamRepo) ListByOrganization(ctx context.Context, organizationID st
 		}
 	}
 	return teams, nil
+}
+
+func (f *fakeTeamRepo) Update(ctx context.Context, team *domain.Team) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *team
+	f.teams[team.ID] = &cp
+	return nil
+}
+
+func (f *fakeTeamRepo) Delete(ctx context.Context, organizationID, teamID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.teams, teamID)
+	return nil
+}
+
+// fakeRoleBindingCleaner backs the new RoleBindingCleaner port - same
+// shape as the application-layer tests' own copy (a different package,
+// can't share the type directly).
+type fakeRoleBindingCleaner struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func newFakeRoleBindingCleaner() *fakeRoleBindingCleaner { return &fakeRoleBindingCleaner{} }
+
+func (f *fakeRoleBindingCleaner) DeleteForSubject(ctx context.Context, organizationID, subjectType, subjectID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, organizationID+"|"+subjectType+"|"+subjectID)
+	return nil
 }

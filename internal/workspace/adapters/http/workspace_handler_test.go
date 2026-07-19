@@ -65,7 +65,9 @@ func TestListWorkspacesHandler_Succeeds(t *testing.T) {
 	membership.add("org-1", "user-1")
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add("org-1", "project-1")
-	svc := application.NewListWorkspacesService(wsRepo, membership, projectChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant("org-1", "user-1", "project:read", "project", "project-1")
+	svc := application.NewListWorkspacesService(wsRepo, membership, projectChecker, newFakePermissionChecker(), visibilityChecker)
 	handler := withAuth(httpadapter.ListWorkspacesHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/project-1/workspaces", "user-1", nil)
@@ -87,7 +89,9 @@ func TestGetWorkspaceHandler_WrongProjectReturnsNotFound(t *testing.T) {
 	membership.add("org-1", "user-1")
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add("org-1", "project-1")
-	svc := application.NewGetWorkspaceService(wsRepo, membership, projectChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant("org-1", "user-1", "project:read", "project", "project-1")
+	svc := application.NewGetWorkspaceService(wsRepo, membership, projectChecker, newFakePermissionChecker(), visibilityChecker)
 	handler := withAuth(httpadapter.GetWorkspaceHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/project-1/workspaces/"+ws.ID, "user-1", nil)

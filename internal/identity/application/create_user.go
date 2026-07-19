@@ -38,11 +38,12 @@ type CreateUserInput struct {
 // organization:manage. Real provisioning (OIDC first-login, admin
 // invite) is still Stage 11/13 territory, not built here.
 type CreateUserService struct {
-	repo UserRepository
+	repo            UserRepository
+	orgBootstrapper DefaultOrganizationBootstrapper
 }
 
-func NewCreateUserService(repo UserRepository) *CreateUserService {
-	return &CreateUserService{repo: repo}
+func NewCreateUserService(repo UserRepository, orgBootstrapper DefaultOrganizationBootstrapper) *CreateUserService {
+	return &CreateUserService{repo: repo, orgBootstrapper: orgBootstrapper}
 }
 
 func (s *CreateUserService) Execute(ctx context.Context, in CreateUserInput) (*domain.User, error) {
@@ -64,8 +65,31 @@ func (s *CreateUserService) Execute(ctx context.Context, in CreateUserInput) (*d
 		}
 	}
 
+	// Checked before Create, not after - countBefore==0 means the row
+	// this call is about to insert will be the very first User ever.
+	countBefore, err := s.repo.Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	if err := s.repo.Create(ctx, user); err != nil {
 		return nil, err
+	}
+
+	if countBefore == 0 {
+		// A fresh install's very first User - give them somewhere real
+		// to land immediately (the panel is per-Organization, so zero
+		// Organizations means nowhere to go at all otherwise). Not
+		// atomic with the User insert above (Identity and Tenancy are
+		// separate contexts, no shared transaction exists anywhere else
+		// in this codebase either) - a failure here surfaces as a real
+		// error even though the User row already committed, the same
+		// class of accepted one-time-bootstrap edge case
+		// RequireAuthOrFirstUserBootstrap's own doc comment already
+		// names.
+		if err := s.orgBootstrapper.BootstrapDefaultOrganization(ctx, user.ID); err != nil {
+			return nil, err
+		}
 	}
 
 	return user, nil

@@ -6,14 +6,18 @@ import (
 	"platform-of-platform/internal/workspace/domain"
 )
 
+// GetWorkspaceService - gated by canAccessWorkspace (project_visibility.go),
+// same reasoning as ListWorkspacesService above.
 type GetWorkspaceService struct {
-	repo           WorkspaceRepository
-	membership     MembershipChecker
-	projectChecker ProjectChecker
+	repo              WorkspaceRepository
+	membership        MembershipChecker
+	projectChecker    ProjectChecker
+	permChecker       PermissionChecker
+	visibilityChecker VisibilityChecker
 }
 
-func NewGetWorkspaceService(repo WorkspaceRepository, membership MembershipChecker, projectChecker ProjectChecker) *GetWorkspaceService {
-	return &GetWorkspaceService{repo: repo, membership: membership, projectChecker: projectChecker}
+func NewGetWorkspaceService(repo WorkspaceRepository, membership MembershipChecker, projectChecker ProjectChecker, permChecker PermissionChecker, visibilityChecker VisibilityChecker) *GetWorkspaceService {
+	return &GetWorkspaceService{repo: repo, membership: membership, projectChecker: projectChecker, permChecker: permChecker, visibilityChecker: visibilityChecker}
 }
 
 func (s *GetWorkspaceService) Execute(ctx context.Context, organizationID, projectID, workspaceID, requestingUserID string) (*domain.Workspace, error) {
@@ -31,6 +35,14 @@ func (s *GetWorkspaceService) Execute(ctx context.Context, organizationID, proje
 	}
 	if !exists {
 		return nil, domain.ErrProjectNotFound
+	}
+
+	canAccess, err := canAccessWorkspace(ctx, s.permChecker, s.visibilityChecker, organizationID, requestingUserID, projectID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if !canAccess {
+		return nil, domain.ErrForbidden
 	}
 
 	ws, err := s.repo.GetByID(ctx, organizationID, workspaceID)

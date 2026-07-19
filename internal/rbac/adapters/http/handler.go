@@ -85,6 +85,46 @@ func CreateRoleHandler(svc *application.CreateRoleService) http.HandlerFunc {
 	}
 }
 
+type updateRoleRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+// UpdateRoleHandler implements `PUT /orgs/{org}/roles/{role}` - rewrites
+// a custom Role's permission set in place (name is immutable, see
+// UpdateRoleService's own doc comment); a builtin Role's id maps to
+// domain.ErrForbidden via writeRBACError, same as every other
+// permission-denied case in this file.
+func UpdateRoleHandler(svc *application.UpdateRoleService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		var req updateRoleRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		role, err := svc.Execute(r.Context(), application.UpdateRoleInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			RoleID:           r.PathValue("role"),
+			Permissions:      req.Permissions,
+		})
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(toRoleResponse(role))
+	}
+}
+
 // ListRolesHandler implements `GET /orgs/{org}/roles`.
 func ListRolesHandler(svc *application.ListRolesService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +228,36 @@ func CreateRoleBindingHandler(svc *application.CreateRoleBindingService) http.Ha
 	}
 }
 
+// roleBindingSummaryResponse mirrors roleBindingResponse plus the
+// resolved display names ListRoleBindingsService now computes
+// (list_role_bindings.go) - *Name is "" when unresolved (a real,
+// displayable state, not an error) or when scope_type="organization"
+// (the frontend already has the current org's own name loaded, no
+// round trip needed for that one case).
+type roleBindingSummaryResponse struct {
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	RoleID         string `json:"role_id"`
+	RoleName       string `json:"role_name"`
+	SubjectType    string `json:"subject_type"`
+	SubjectID      string `json:"subject_id"`
+	SubjectName    string `json:"subject_name"`
+	ScopeType      string `json:"scope_type"`
+	ScopeID        string `json:"scope_id"`
+	ScopeName      string `json:"scope_name"`
+	Effect         string `json:"effect"`
+	CreatedAt      string `json:"created_at"`
+}
+
+func toRoleBindingSummaryResponse(b application.RoleBindingSummary) roleBindingSummaryResponse {
+	return roleBindingSummaryResponse{
+		ID: b.ID, OrganizationID: b.OrganizationID, RoleID: b.RoleID, RoleName: b.RoleName,
+		SubjectType: b.SubjectType, SubjectID: b.SubjectID, SubjectName: b.SubjectName,
+		ScopeType: b.ScopeType, ScopeID: b.ScopeID, ScopeName: b.ScopeName, Effect: b.Effect,
+		CreatedAt: b.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
 // ListRoleBindingsHandler implements
 // `GET /orgs/{org}/role-bindings?subject_id=...`.
 func ListRoleBindingsHandler(svc *application.ListRoleBindingsService) http.HandlerFunc {
@@ -204,13 +274,37 @@ func ListRoleBindingsHandler(svc *application.ListRoleBindingsService) http.Hand
 			return
 		}
 
-		responses := make([]roleBindingResponse, 0, len(bindings))
+		responses := make([]roleBindingSummaryResponse, 0, len(bindings))
 		for _, b := range bindings {
-			responses = append(responses, toRoleBindingResponse(b))
+			responses = append(responses, toRoleBindingSummaryResponse(b))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+	}
+}
+
+// DeleteRoleBindingHandler implements
+// `DELETE /orgs/{org}/role-bindings/{id}` - a real, permanent removal.
+func DeleteRoleBindingHandler(svc *application.DeleteRoleBindingService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.DeleteRoleBindingInput{
+			OrganizationID:   r.PathValue("id"),
+			RequestingUserID: userID,
+			BindingID:        r.PathValue("bindingID"),
+		})
+		if err != nil {
+			writeRBACError(w, err)
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

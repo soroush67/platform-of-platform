@@ -95,10 +95,40 @@ func TestGetWorkspaceService_RejectsWorkspaceFromAnotherProject(t *testing.T) {
 	ws, _ := domain.NewWorkspace(testOrgID, "a-different-project", nil, "ws", domain.ExecutionEngineCompose)
 	repo.put(ws)
 
-	svc := application.NewGetWorkspaceService(repo, membership, projectChecker)
+	permChecker := newFakePermissionChecker()
+	permChecker.grant(testOrgID, "member-1", "organization:manage")
+	svc := application.NewGetWorkspaceService(repo, membership, projectChecker, permChecker, newFakeVisibilityChecker())
 	_, err := svc.Execute(context.Background(), testOrgID, testProjectID, ws.ID, "member-1")
 	if !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("expected ErrWorkspaceNotFound for a workspace under a different project, got: %v", err)
+	}
+}
+
+func TestGetWorkspaceService_RequiresVisibilityGrant(t *testing.T) {
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	projectChecker := newFakeProjectChecker()
+	projectChecker.add(testOrgID, testProjectID)
+	repo := newFakeWorkspaceRepo()
+	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineCompose)
+	repo.put(ws)
+
+	// No organization:manage and no project/workspace-scope grant at
+	// all - a plain org member no longer sees every Workspace by
+	// default (the whole point of this session's per-project visibility
+	// change).
+	svc := application.NewGetWorkspaceService(repo, membership, projectChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
+	if _, err := svc.Execute(context.Background(), testOrgID, testProjectID, ws.ID, "member-1"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without a visibility grant, got: %v", err)
+	}
+
+	// A workspace-scope grant alone (no project-scope grant) is enough -
+	// handing out one Workspace without the whole Project.
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(testOrgID, "member-1", "workspace:read", "workspace", ws.ID)
+	svc = application.NewGetWorkspaceService(repo, membership, projectChecker, newFakePermissionChecker(), visibilityChecker)
+	if _, err := svc.Execute(context.Background(), testOrgID, testProjectID, ws.ID, "member-1"); err != nil {
+		t.Fatalf("expected a workspace-scope grant to allow reading it, got: %v", err)
 	}
 }
 
@@ -113,12 +143,27 @@ func TestListWorkspacesService_ScopedToProject(t *testing.T) {
 	repo.put(inProject)
 	repo.put(otherProject)
 
-	svc := application.NewListWorkspacesService(repo, membership, projectChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(testOrgID, "member-1", "project:read", "project", testProjectID)
+	svc := application.NewListWorkspacesService(repo, membership, projectChecker, newFakePermissionChecker(), visibilityChecker)
 	got, err := svc.Execute(context.Background(), testOrgID, testProjectID, "member-1")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if len(got) != 1 || got[0].ID != inProject.ID {
 		t.Errorf("expected exactly the one workspace in this project, got %+v", got)
+	}
+}
+
+func TestListWorkspacesService_ForbiddenWithoutVisibilityGrant(t *testing.T) {
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	projectChecker := newFakeProjectChecker()
+	projectChecker.add(testOrgID, testProjectID)
+	repo := newFakeWorkspaceRepo()
+
+	svc := application.NewListWorkspacesService(repo, membership, projectChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
+	if _, err := svc.Execute(context.Background(), testOrgID, testProjectID, "member-1"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without a visibility grant, got: %v", err)
 	}
 }

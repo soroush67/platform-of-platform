@@ -15,6 +15,15 @@ type TeamRepository interface {
 	RemoveMember(ctx context.Context, organizationID, teamID, userID string) error
 	GetByID(ctx context.Context, organizationID, teamID string) (*domain.Team, error)
 	ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Team, error)
+	// ListMembers backs ListTeamMembersService's own new roster endpoint
+	// (list_team_members.go).
+	ListMembers(ctx context.Context, organizationID, teamID string) ([]*domain.TeamMembership, error)
+	// Update backs UpdateTeamService (rename). Delete backs
+	// DeleteTeamService - removes the Team's own team_memberships too,
+	// in the same transaction (see the postgres adapter's own comment on
+	// why that's required, not optional).
+	Update(ctx context.Context, team *domain.Team) error
+	Delete(ctx context.Context, organizationID, teamID string) error
 }
 
 // CreateTeamInput implements `POST /orgs/{org}/teams`

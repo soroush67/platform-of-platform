@@ -60,9 +60,9 @@ func TestListProjectsHandler_Succeeds(t *testing.T) {
 	projectRepo.put(p)
 	membershipRepo := newFakeMembershipRepo()
 	membershipRepo.add("org-1", "user-1")
-	permChecker := newFakePermissionChecker()
-	permChecker.grant("org-1", "user-1", "project:read")
-	svc := application.NewListProjectsService(projectRepo, membershipRepo, permChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant("org-1", "user-1", "project:read", "project", p.ID)
+	svc := application.NewListProjectsService(projectRepo, membershipRepo, newFakePermissionChecker(), visibilityChecker)
 	handler := withAuth(httpadapter.ListProjectsHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects", "user-1", nil)
@@ -87,9 +87,13 @@ func TestListProjectsHandler_Succeeds(t *testing.T) {
 func TestGetProjectHandler_UnknownReturnsNotFound(t *testing.T) {
 	membershipRepo := newFakeMembershipRepo()
 	membershipRepo.add("org-1", "user-1")
+	// organization:manage (Owner/Admin bypass), not a project-scope
+	// grant - a project-scope grant can only ever match a real project's
+	// own id, so it can never let a made-up id reach repo.GetByID's own
+	// not-found check the way a genuine org-wide bypass does.
 	permChecker := newFakePermissionChecker()
-	permChecker.grant("org-1", "user-1", "project:read")
-	svc := application.NewGetProjectService(newFakeProjectRepo(), membershipRepo, permChecker)
+	permChecker.grant("org-1", "user-1", "organization:manage")
+	svc := application.NewGetProjectService(newFakeProjectRepo(), membershipRepo, permChecker, newFakeVisibilityChecker())
 	handler := withAuth(httpadapter.GetProjectHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/projects/nonexistent", "user-1", nil)

@@ -214,6 +214,61 @@ func (f *fakePermissionChecker) grant(orgID, userID, permission string) {
 	f.perms[orgID+"|"+userID+"|"+permission] = true
 }
 
+// fakeVisibilityChecker backs the new VisibilityChecker port
+// (project_visibility.go) - ListVariablesService's own per-project
+// visibility gate for project/environment/workspace-scoped Variables,
+// separate from fakePermissionChecker above (which only covers the
+// organization:manage bypass).
+type fakeVisibilityChecker struct {
+	mu     sync.Mutex
+	grants map[string]bool
+}
+
+func newFakeVisibilityChecker() *fakeVisibilityChecker {
+	return &fakeVisibilityChecker{grants: map[string]bool{}}
+}
+
+func (f *fakeVisibilityChecker) HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.grants[organizationID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID], nil
+}
+
+func (f *fakeVisibilityChecker) grant(orgID, userID, permission, scopeType, scopeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[orgID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID] = true
+}
+
+// fakeEnvironmentProjectResolver backs the new EnvironmentProjectResolver
+// port (ports.go) - resolves an environment-scoped Variable's scope_id
+// back to its owning Project id, same map-keyed-lookup shape as
+// fakeEnvironmentChecker above.
+type fakeEnvironmentProjectResolver struct {
+	mu       sync.Mutex
+	projects map[string]string
+}
+
+func newFakeEnvironmentProjectResolver() *fakeEnvironmentProjectResolver {
+	return &fakeEnvironmentProjectResolver{projects: map[string]string{}}
+}
+
+func (f *fakeEnvironmentProjectResolver) ProjectIDForEnvironment(ctx context.Context, organizationID, environmentID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.projects[organizationID+"|"+environmentID]
+	if !ok {
+		return "", domain.ErrScopeNotFound
+	}
+	return p, nil
+}
+
+func (f *fakeEnvironmentProjectResolver) add(orgID, environmentID, projectID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.projects[orgID+"|"+environmentID] = projectID
+}
+
 type fakeOrganizationChecker struct {
 	mu       sync.Mutex
 	archived map[string]bool

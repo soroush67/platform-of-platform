@@ -5,8 +5,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/identity/domain"
@@ -42,7 +44,14 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		user.ID, user.Username, user.Email, string(user.AuthSource), user.ExternalID, user.Status, user.MFAEnrolled, user.CreatedAt, user.PasswordHash, user.IsPlatformAdmin,
 	)
-	return err
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrUserAlreadyExists
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
@@ -117,6 +126,29 @@ func (r *UserRepository) GetUser(ctx context.Context, id string) (username, emai
 		return "", "", false, err
 	}
 	return username, email, true, nil
+}
+
+// ListAll is UserReader.ListAll's structural satisfaction (Tenancy's
+// own port, internal/tenancy/application/ports.go) - backs the Members
+// page's "add existing user" picker (ListAvailableUsersService), since
+// User creation is platform-global and has no reverse index from "every
+// User" back to "which orgs is this User NOT in yet."
+func (r *UserRepository) ListAll(ctx context.Context) ([]struct{ ID, Username, Email string }, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, username, email FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []struct{ ID, Username, Email string }
+	for rows.Next() {
+		var u struct{ ID, Username, Email string }
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 // UpdatePasswordHash is PasswordResetService's own write - the only

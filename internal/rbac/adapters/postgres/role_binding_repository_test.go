@@ -181,6 +181,85 @@ func TestRoleBindingRepository_HasPermissionAtScope_ProjectScopeGrant(t *testing
 	}
 }
 
+// TestRoleBindingRepository_HasScopedPermission_NoOrganizationFallback is
+// HasScopedPermission's own defining behavior, the whole reason it exists
+// as a separate method from HasPermissionAtScope above: an organization-
+// scope binding must NOT grant it, even though HasPermissionAtScope
+// treats that same binding as matching every project unconditionally
+// (see project_visibility.go in Tenancy/Workspace/Execution/Variables'
+// own application packages for why - every org member already gets an
+// organization-scope "read" role binding on join, so reusing
+// HasPermissionAtScope for a real default-hidden Project visibility
+// gate would never actually hide anything).
+func TestRoleBindingRepository_HasScopedPermission_NoOrganizationFallback(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	roleRepo := rbacpg.NewRoleRepository(pool)
+	repo := rbacpg.NewRoleBindingRepository(pool)
+	orgID := insertOrg(t, root)
+	userID := insertUser(t, root)
+
+	role, _ := domain.NewRole(orgID, "reader", []domain.Permission{domain.PermissionProjectRead})
+	if err := roleRepo.Create(ctx, role); err != nil {
+		t.Fatalf("Create role: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM roles WHERE id = $1`, role.ID) })
+
+	projectID := uuid.NewString()
+	orgBinding := domain.NewRoleBinding(orgID, role.ID, domain.SubjectTypeUser, userID, domain.ScopeTypeOrganization, orgID, domain.EffectAllow)
+	if err := repo.Create(ctx, orgBinding); err != nil {
+		t.Fatalf("Create org-scope binding: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM role_bindings WHERE id = $1`, orgBinding.ID) })
+
+	// The exact same organization-scope binding that DOES satisfy
+	// HasPermissionAtScope for this project (proving this isn't just a
+	// bug in the fixture) must NOT satisfy HasScopedPermission.
+	allowedAtScope, err := repo.HasPermissionAtScope(ctx, orgID, userID, string(domain.PermissionProjectRead), &projectID, nil)
+	if err != nil {
+		t.Fatalf("HasPermissionAtScope: %v", err)
+	}
+	if !allowedAtScope {
+		t.Fatal("expected HasPermissionAtScope to treat the org-scope binding as matching this project (sanity check)")
+	}
+
+	allowedScoped, err := repo.HasScopedPermission(ctx, orgID, userID, string(domain.PermissionProjectRead), "project", projectID)
+	if err != nil {
+		t.Fatalf("HasScopedPermission: %v", err)
+	}
+	if allowedScoped {
+		t.Error("expected HasScopedPermission NOT to fall back to the organization-scope binding")
+	}
+
+	// Now bind the same role directly at this project's own scope -
+	// HasScopedPermission should allow it once the grant is genuinely
+	// that specific.
+	projectBinding := domain.NewRoleBinding(orgID, role.ID, domain.SubjectTypeUser, userID, domain.ScopeTypeProject, projectID, domain.EffectAllow)
+	if err := repo.Create(ctx, projectBinding); err != nil {
+		t.Fatalf("Create project-scope binding: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM role_bindings WHERE id = $1`, projectBinding.ID) })
+
+	allowedScoped, err = repo.HasScopedPermission(ctx, orgID, userID, string(domain.PermissionProjectRead), "project", projectID)
+	if err != nil {
+		t.Fatalf("HasScopedPermission (after project-scope grant): %v", err)
+	}
+	if !allowedScoped {
+		t.Error("expected an exact project-scope binding to satisfy HasScopedPermission")
+	}
+
+	// A different project's id must still not match.
+	otherProjectID := uuid.NewString()
+	allowedScoped, err = repo.HasScopedPermission(ctx, orgID, userID, string(domain.PermissionProjectRead), "project", otherProjectID)
+	if err != nil {
+		t.Fatalf("HasScopedPermission (different project): %v", err)
+	}
+	if allowedScoped {
+		t.Error("expected the project-scope binding NOT to satisfy HasScopedPermission for a different project id")
+	}
+}
+
 // TestRoleBindingRepository_HasPermissionAtScope_DenyOverridesAllow is
 // the real regression test for HasPermissionAtScope's own doc comment -
 // the entire reason this codebase's RBAC evaluation is AWS-IAM-style
@@ -313,6 +392,76 @@ func TestRoleBindingRepository_Create_DuplicateIsIgnored(t *testing.T) {
 	}
 }
 
+func TestRoleBindingRepository_Delete(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	roleRepo := rbacpg.NewRoleRepository(pool)
+	repo := rbacpg.NewRoleBindingRepository(pool)
+	orgID := insertOrg(t, root)
+	userID := insertUser(t, root)
+
+	role, _ := domain.NewRole(orgID, "delete-target-role", []domain.Permission{domain.PermissionWorkspaceRead})
+	if err := roleRepo.Create(ctx, role); err != nil {
+		t.Fatalf("Create role: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM roles WHERE id = $1`, role.ID) })
+
+	binding := domain.NewRoleBinding(orgID, role.ID, domain.SubjectTypeUser, userID, domain.ScopeTypeOrganization, orgID, domain.EffectAllow)
+	if err := repo.Create(ctx, binding); err != nil {
+		t.Fatalf("Create binding: %v", err)
+	}
+
+	if err := repo.Delete(ctx, orgID, binding.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	var count int
+	if err := root.QueryRow(ctx, `SELECT count(*) FROM role_bindings WHERE id = $1`, binding.ID).Scan(&count); err != nil {
+		t.Fatalf("query role_bindings: %v", err)
+	}
+	if count != 0 {
+		t.Error("expected the binding row to be gone after Delete")
+	}
+}
+
+func TestRoleBindingRepository_Delete_WrongOrganizationLeavesRowIntact(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	roleRepo := rbacpg.NewRoleRepository(pool)
+	repo := rbacpg.NewRoleBindingRepository(pool)
+	orgID := insertOrg(t, root)
+	userID := insertUser(t, root)
+
+	role, _ := domain.NewRole(orgID, "delete-wrong-org-role", []domain.Permission{domain.PermissionWorkspaceRead})
+	if err := roleRepo.Create(ctx, role); err != nil {
+		t.Fatalf("Create role: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM roles WHERE id = $1`, role.ID) })
+
+	binding := domain.NewRoleBinding(orgID, role.ID, domain.SubjectTypeUser, userID, domain.ScopeTypeOrganization, orgID, domain.EffectAllow)
+	if err := repo.Create(ctx, binding); err != nil {
+		t.Fatalf("Create binding: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM role_bindings WHERE id = $1`, binding.ID) })
+
+	// A mismatched organization_id in the WHERE clause must match zero
+	// rows - the real, second enforcement point beyond the application
+	// layer's own membership/permission checks.
+	if err := repo.Delete(ctx, uuid.NewString(), binding.ID); err != nil {
+		t.Fatalf("Delete (wrong org): %v", err)
+	}
+
+	var count int
+	if err := root.QueryRow(ctx, `SELECT count(*) FROM role_bindings WHERE id = $1`, binding.ID).Scan(&count); err != nil {
+		t.Fatalf("query role_bindings: %v", err)
+	}
+	if count != 1 {
+		t.Error("expected the binding row to survive a Delete scoped to a different organization")
+	}
+}
+
 func TestRoleBindingRepository_ListForSubject(t *testing.T) {
 	ctx := context.Background()
 	pool := dbtest.AppPool(t)
@@ -353,5 +502,52 @@ func TestRoleBindingRepository_ListForSubject(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Errorf("expected both bindings when subjectID is empty, got %d", len(all))
+	}
+}
+
+func TestRoleBindingRepository_DeleteForSubject(t *testing.T) {
+	ctx := context.Background()
+	pool := dbtest.AppPool(t)
+	root := dbtest.RootPool(t)
+	roleRepo := rbacpg.NewRoleRepository(pool)
+	repo := rbacpg.NewRoleBindingRepository(pool)
+	orgID := insertOrg(t, root)
+	userID := insertUser(t, root)
+	teamID := uuid.NewString()
+	mustExec(t, root, `INSERT INTO teams (id, organization_id, name) VALUES ($1, $2, 'delete-for-subject-team')`, teamID, orgID)
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM teams WHERE id = $1`, teamID) })
+
+	role, _ := domain.NewRole(orgID, "delete-for-subject-role", []domain.Permission{domain.PermissionWorkspaceRead})
+	if err := roleRepo.Create(ctx, role); err != nil {
+		t.Fatalf("Create role: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM roles WHERE id = $1`, role.ID) })
+
+	teamBinding := domain.NewRoleBinding(orgID, role.ID, domain.SubjectTypeTeam, teamID, domain.ScopeTypeOrganization, orgID, domain.EffectAllow)
+	if err := repo.Create(ctx, teamBinding); err != nil {
+		t.Fatalf("Create team binding: %v", err)
+	}
+	userBinding := domain.NewRoleBinding(orgID, role.ID, domain.SubjectTypeUser, userID, domain.ScopeTypeOrganization, orgID, domain.EffectAllow)
+	if err := repo.Create(ctx, userBinding); err != nil {
+		t.Fatalf("Create user binding: %v", err)
+	}
+	t.Cleanup(func() { mustExec(t, root, `DELETE FROM role_bindings WHERE role_id = $1`, role.ID) })
+
+	if err := repo.DeleteForSubject(ctx, orgID, "team", teamID); err != nil {
+		t.Fatalf("DeleteForSubject: %v", err)
+	}
+
+	var teamCount, userCount int
+	if err := root.QueryRow(ctx, `SELECT count(*) FROM role_bindings WHERE id = $1`, teamBinding.ID).Scan(&teamCount); err != nil {
+		t.Fatalf("query team binding: %v", err)
+	}
+	if err := root.QueryRow(ctx, `SELECT count(*) FROM role_bindings WHERE id = $1`, userBinding.ID).Scan(&userCount); err != nil {
+		t.Fatalf("query user binding: %v", err)
+	}
+	if teamCount != 0 {
+		t.Error("expected the team's own binding to be gone")
+	}
+	if userCount != 1 {
+		t.Error("expected the unrelated user binding to survive - DeleteForSubject must only touch the exact subject asked for")
 	}
 }

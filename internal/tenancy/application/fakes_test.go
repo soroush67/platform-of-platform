@@ -154,8 +154,41 @@ func (f *fakeMembershipRepo) Create(ctx context.Context, m *domain.OrganizationM
 func (f *fakeMembershipRepo) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	m, ok := f.members[organizationID+"|"+userID]
+	return ok && m.BlockedAt == nil, nil
+}
+
+// MembershipExists is IsMember's blocked-agnostic sibling - see the
+// real port's own doc comment (ports.go) for why target-validation in
+// Block/Unblock/RemoveMember needs this instead of IsMember.
+func (f *fakeMembershipRepo) MembershipExists(ctx context.Context, organizationID, userID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	_, ok := f.members[organizationID+"|"+userID]
 	return ok, nil
+}
+
+func (f *fakeMembershipRepo) SetBlocked(ctx context.Context, organizationID, userID string, blocked bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.members[organizationID+"|"+userID]
+	if !ok {
+		return nil
+	}
+	if blocked {
+		now := time.Now()
+		m.BlockedAt = &now
+	} else {
+		m.BlockedAt = nil
+	}
+	return nil
+}
+
+func (f *fakeMembershipRepo) Delete(ctx context.Context, organizationID, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.members, organizationID+"|"+userID)
+	return nil
 }
 
 // ListByOrganization mirrors the real postgres adapter's ORDER BY
@@ -178,6 +211,20 @@ func (f *fakeMembershipRepo) add(orgID, userID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.members[orgID+"|"+userID] = &domain.OrganizationMembership{OrganizationID: orgID, UserID: userID, JoinedAt: time.Now()}
+}
+
+func (f *fakeMembershipRepo) isBlocked(orgID, userID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m, ok := f.members[orgID+"|"+userID]
+	return ok && m.BlockedAt != nil
+}
+
+func (f *fakeMembershipRepo) exists(orgID, userID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.members[orgID+"|"+userID]
+	return ok
 }
 
 // fakeUserReader/fakeRoleReader back ListMembersService's own two new
@@ -208,6 +255,19 @@ func (f *fakeUserReader) set(userID, username, email string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.users[userID] = [2]string{username, email}
+}
+
+// ListAll backs ListAvailableUsersService's own tests - order isn't
+// guaranteed (map iteration), tests that care sort or use a set
+// comparison, same as every other map-backed fake in this file.
+func (f *fakeUserReader) ListAll(ctx context.Context) ([]struct{ ID, Username, Email string }, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]struct{ ID, Username, Email string }, 0, len(f.users))
+	for id, u := range f.users {
+		out = append(out, struct{ ID, Username, Email string }{ID: id, Username: u[0], Email: u[1]})
+	}
+	return out, nil
 }
 
 type fakeRoleReader struct {
@@ -262,6 +322,34 @@ func (f *fakePermChecker) grant(orgID, userID, permission string) {
 		f.perms[key] = map[string]bool{}
 	}
 	f.perms[key][permission] = true
+}
+
+// fakeVisibilityChecker backs the new VisibilityChecker port
+// (project_visibility.go) - a grant is keyed by the exact (org, user,
+// permission, scopeType, scopeID) tuple, deliberately NOT modeling the
+// real HasScopedPermission's team-membership resolution or Deny-
+// override semantics (internal/rbac's own real tests already cover
+// those) - same "narrow fake per narrow port" reasoning as
+// fakePermChecker above.
+type fakeVisibilityChecker struct {
+	mu     sync.Mutex
+	grants map[string]bool
+}
+
+func newFakeVisibilityChecker() *fakeVisibilityChecker {
+	return &fakeVisibilityChecker{grants: map[string]bool{}}
+}
+
+func (f *fakeVisibilityChecker) HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.grants[organizationID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID], nil
+}
+
+func (f *fakeVisibilityChecker) grant(orgID, userID, permission, scopeType, scopeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[orgID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID] = true
 }
 
 // fakeRoleAssigner satisfies both RoleAssigner and RoleChanger -
@@ -341,11 +429,11 @@ func (f *fakeProjectRepo) ListByOrganization(ctx context.Context, organizationID
 type fakeTeamRepo struct {
 	mu          sync.Mutex
 	teams       map[string]*domain.Team
-	memberships map[string]bool // "teamID|userID"
+	memberships map[string]*domain.TeamMembership // "teamID|userID"
 }
 
 func newFakeTeamRepo() *fakeTeamRepo {
-	return &fakeTeamRepo{teams: map[string]*domain.Team{}, memberships: map[string]bool{}}
+	return &fakeTeamRepo{teams: map[string]*domain.Team{}, memberships: map[string]*domain.TeamMembership{}}
 }
 
 func (f *fakeTeamRepo) Create(ctx context.Context, t *domain.Team) error {
@@ -370,7 +458,8 @@ func (f *fakeTeamRepo) GetByID(ctx context.Context, organizationID, teamID strin
 func (f *fakeTeamRepo) AddMember(ctx context.Context, m *domain.TeamMembership) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.memberships[m.TeamID+"|"+m.UserID] = true
+	cp := *m
+	f.memberships[m.TeamID+"|"+m.UserID] = &cp
 	return nil
 }
 
@@ -384,7 +473,8 @@ func (f *fakeTeamRepo) RemoveMember(ctx context.Context, organizationID, teamID,
 func (f *fakeTeamRepo) isMember(teamID, userID string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.memberships[teamID+"|"+userID]
+	_, ok := f.memberships[teamID+"|"+userID]
+	return ok
 }
 
 func (f *fakeTeamRepo) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Team, error) {
@@ -398,4 +488,73 @@ func (f *fakeTeamRepo) ListByOrganization(ctx context.Context, organizationID st
 		}
 	}
 	return teams, nil
+}
+
+// ListMembers backs ListTeamMembersService's own new roster endpoint -
+// filters this fake's flat membership map down to the one team asked
+// for, same shape as the real postgres adapter's WHERE clause.
+func (f *fakeTeamRepo) ListMembers(ctx context.Context, organizationID, teamID string) ([]*domain.TeamMembership, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*domain.TeamMembership
+	for _, m := range f.memberships {
+		if m.TeamID == teamID && m.OrganizationID == organizationID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeTeamRepo) Update(ctx context.Context, team *domain.Team) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *team
+	f.teams[team.ID] = &cp
+	return nil
+}
+
+func (f *fakeTeamRepo) Delete(ctx context.Context, organizationID, teamID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.teams, teamID)
+	for key, m := range f.memberships {
+		if m.TeamID == teamID {
+			delete(f.memberships, key)
+		}
+	}
+	return nil
+}
+
+// fakeRoleBindingCleaner backs the new RoleBindingCleaner port
+// (DeleteTeamService/RemoveMemberService) - records every call so tests
+// can assert cleanup actually happened, before the team/membership row
+// itself, without modeling RBAC's own role_bindings table here.
+type fakeRoleBindingCleaner struct {
+	mu    sync.Mutex
+	calls []string // "orgID|subjectType|subjectID"
+	err   error
+}
+
+func newFakeRoleBindingCleaner() *fakeRoleBindingCleaner { return &fakeRoleBindingCleaner{} }
+
+func (f *fakeRoleBindingCleaner) DeleteForSubject(ctx context.Context, organizationID, subjectType, subjectID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, organizationID+"|"+subjectType+"|"+subjectID)
+	return nil
+}
+
+func (f *fakeRoleBindingCleaner) calledFor(organizationID, subjectType, subjectID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if c == organizationID+"|"+subjectType+"|"+subjectID {
+			return true
+		}
+	}
+	return false
 }

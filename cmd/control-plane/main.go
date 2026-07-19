@@ -64,12 +64,14 @@ import (
 	tenancyhttp "platform-of-platform/internal/tenancy/adapters/http"
 	tenancypg "platform-of-platform/internal/tenancy/adapters/postgres"
 	tenancyapp "platform-of-platform/internal/tenancy/application"
+	tenancydomain "platform-of-platform/internal/tenancy/domain"
 	variableshttp "platform-of-platform/internal/variables/adapters/http"
 	variablespg "platform-of-platform/internal/variables/adapters/postgres"
 	variablesapp "platform-of-platform/internal/variables/application"
 	workspacehttp "platform-of-platform/internal/workspace/adapters/http"
 	workspacepg "platform-of-platform/internal/workspace/adapters/postgres"
 	workspaceapp "platform-of-platform/internal/workspace/application"
+	workspacedomain "platform-of-platform/internal/workspace/domain"
 )
 
 func main() {
@@ -170,14 +172,31 @@ func main() {
 	listMyOrganizationsService := tenancyapp.NewListMyOrganizationsService(rootMembershipRepo)
 	addMemberService := tenancyapp.NewAddMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
 	changeMemberRoleService := tenancyapp.NewChangeMemberRoleService(membershipRepo, roleBindingRepo, roleBindingRepo)
+	blockMemberService := tenancyapp.NewBlockMemberService(membershipRepo, roleBindingRepo)
+	unblockMemberService := tenancyapp.NewUnblockMemberService(membershipRepo, roleBindingRepo)
+	// removeMemberService's RoleBindingCleaner port is satisfied by
+	// roleBindingRepo structurally (DeleteForSubject, added this
+	// session) - same "one concrete adapter, many small ports" reuse as
+	// everywhere else roleBindingRepo appears in this file.
+	removeMemberService := tenancyapp.NewRemoveMemberService(membershipRepo, roleBindingRepo, roleBindingRepo)
 	createProjectService := tenancyapp.NewCreateProjectService(projectRepo, membershipRepo, roleBindingRepo, orgRepo)
-	listProjectsService := tenancyapp.NewListProjectsService(projectRepo, membershipRepo, roleBindingRepo)
-	getProjectService := tenancyapp.NewGetProjectService(projectRepo, membershipRepo, roleBindingRepo)
+	listProjectsService := tenancyapp.NewListProjectsService(projectRepo, membershipRepo, roleBindingRepo, roleBindingRepo)
+	getProjectService := tenancyapp.NewGetProjectService(projectRepo, membershipRepo, roleBindingRepo, roleBindingRepo)
 	createTeamService := tenancyapp.NewCreateTeamService(teamRepo, membershipRepo, roleBindingRepo)
 	listTeamsService := tenancyapp.NewListTeamsService(teamRepo, membershipRepo)
 	addTeamMemberService := tenancyapp.NewAddTeamMemberService(teamRepo, membershipRepo, roleBindingRepo)
 	removeTeamMemberService := tenancyapp.NewRemoveTeamMemberService(teamRepo, membershipRepo, roleBindingRepo)
+	updateTeamService := tenancyapp.NewUpdateTeamService(teamRepo, membershipRepo, roleBindingRepo)
+	// deleteTeamService's RoleBindingCleaner port is satisfied by
+	// roleBindingRepo structurally (DeleteForSubject, added this
+	// session).
+	deleteTeamService := tenancyapp.NewDeleteTeamService(teamRepo, membershipRepo, roleBindingRepo, roleBindingRepo)
 	archiveOrganizationService := tenancyapp.NewArchiveOrganizationService(orgRepo, orgRepo, membershipRepo, roleBindingRepo)
+	// deleteOrganizationService is the direct, immediate hard-delete path
+	// (POST .../hard-delete) - orgRepo itself satisfies
+	// DeleteOrganizationRepository (Purge), the same method
+	// purgeReaper below calls on its own 30-day-later schedule.
+	deleteOrganizationService := tenancyapp.NewDeleteOrganizationService(orgRepo, orgRepo, membershipRepo, roleBindingRepo)
 
 	// RBAC's own first-class endpoints (docs/architecture/13-module-
 	// identity-rbac-tenancy.md §3) - custom roles + generic role-bindings,
@@ -185,7 +204,11 @@ func main() {
 	// roleBindingRepo as a cross-context port, never RBAC's own surface).
 	createRoleService := rbacapp.NewCreateRoleService(roleRepo, membershipRepo, roleBindingRepo)
 	listRolesService := rbacapp.NewListRolesService(roleRepo, membershipRepo)
-	listRoleBindingsService := rbacapp.NewListRoleBindingsService(roleBindingRepo, membershipRepo)
+	updateRoleService := rbacapp.NewUpdateRoleService(roleRepo, membershipRepo, roleBindingRepo)
+	deleteRoleBindingService := rbacapp.NewDeleteRoleBindingService(roleBindingRepo, membershipRepo, roleBindingRepo)
+	// listRoleBindingsService is wired further down (main.go), after
+	// userRepo/workspaceRepo exist - it needs both for its new
+	// display-name resolution (list_role_bindings.go).
 
 	environmentRepo := workspacepg.NewEnvironmentRepository(pool)
 	workspaceRepo := workspacepg.NewWorkspaceRepository(pool)
@@ -197,8 +220,8 @@ func main() {
 	listEnvironmentsService := workspaceapp.NewListEnvironmentsService(environmentRepo, membershipRepo, projectRepo)
 	getEnvironmentService := workspaceapp.NewGetEnvironmentService(environmentRepo, membershipRepo, projectRepo)
 	createWorkspaceService := workspaceapp.NewCreateWorkspaceService(workspaceRepo, environmentRepo, membershipRepo, roleBindingRepo, projectRepo, orgRepo)
-	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo)
-	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo)
+	listWorkspacesService := workspaceapp.NewListWorkspacesService(workspaceRepo, membershipRepo, projectRepo, roleBindingRepo, roleBindingRepo)
+	getWorkspaceService := workspaceapp.NewGetWorkspaceService(workspaceRepo, membershipRepo, projectRepo, roleBindingRepo, roleBindingRepo)
 
 	// Worker registry + gRPC server (docs/architecture/17-workers.md §1) -
 	// created before the Execution services below since CancelRunService
@@ -211,8 +234,8 @@ func main() {
 	runRepo := executionpg.NewRunRepository(pool)
 	triggerRunService := executionapp.NewTriggerRunService(runRepo, workspaceRepo, workspaceRepo, roleBindingRepo, orgRepo)
 	cancelRunService := executionapp.NewCancelRunService(runRepo, workspaceRepo, roleBindingRepo, workerRegistry)
-	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo)
-	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo)
+	listRunsService := executionapp.NewListRunsService(runRepo, membershipRepo, workspaceRepo, roleBindingRepo, roleBindingRepo)
+	getRunService := executionapp.NewGetRunService(runRepo, membershipRepo, workspaceRepo, roleBindingRepo, roleBindingRepo)
 	workerReportService := executionapp.NewWorkerReportService(runRepo, workspaceRepo, workerRegistry)
 	staleRunReaper := executionapp.NewStaleRunReaperService(runRepo, workspaceRepo, workerRegistry, cfg.RunStaleAfter, cfg.RunReaperInterval, logger)
 	purgeReaper := tenancyapp.NewPurgeReaperService(orgRepo, cfg.OrgPurgeAfter, cfg.OrgPurgeReaperInterval, logger)
@@ -249,9 +272,23 @@ func main() {
 		return true, nil
 	})
 
+	// environmentProjectResolverFunc bridges Variables' own new
+	// EnvironmentProjectResolver port (the per-project visibility gate's
+	// only way to resolve an environment-scoped Variable back to its
+	// owning Project) to Workspace's existing EnvironmentRepository -
+	// same cross-context bridge-closure shape as secretMountCheckerFunc
+	// above (Variables never imports workspace/domain directly).
+	environmentProjectResolverFunc := variablesapp.EnvironmentProjectResolverFunc(func(ctx context.Context, organizationID, environmentID string) (string, error) {
+		env, err := environmentRepo.GetByID(ctx, organizationID, environmentID)
+		if err != nil {
+			return "", err
+		}
+		return env.ProjectID, nil
+	})
+
 	variableRepo := variablespg.NewVariableRepository(pool)
 	createVariableService := variablesapp.NewCreateVariableService(variableRepo, membershipRepo, projectRepo, environmentRepo, workspaceRepo, roleBindingRepo, orgRepo, secretMountCheckerFunc)
-	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo)
+	listVariablesService := variablesapp.NewListVariablesService(variableRepo, membershipRepo, roleBindingRepo, roleBindingRepo, workspaceRepo, environmentProjectResolverFunc)
 	resolveVariableService := variablesapp.NewResolveVariableService(variableRepo, membershipRepo, workspaceRepo, resolveSecretService)
 	updateVariableService := variablesapp.NewUpdateVariableService(variableRepo, membershipRepo, roleBindingRepo)
 	deleteVariableService := variablesapp.NewDeleteVariableService(variableRepo, membershipRepo, roleBindingRepo)
@@ -341,20 +378,89 @@ func main() {
 	relay := outbox.NewRelay(pool, combinedHandler, 2*time.Second, logger)
 
 	userRepo := identitypg.NewUserRepository(pool)
+
+	// listRoleBindingsService's name-resolver ports (ports.go) - each a
+	// closure wrapping another context's existing GetByID and
+	// translating its own not-found error into (_, false, nil), same
+	// bridge-closure shape as environmentProjectResolverFunc/
+	// secretMountCheckerFunc elsewhere in this file. userRepo already
+	// structurally satisfies rbacapp.UserReader (identical signature to
+	// Tenancy's own UserReader, same GetUser method), passed directly -
+	// no closure needed for that one.
+	teamNameReaderFunc := rbacapp.TeamNameReaderFunc(func(ctx context.Context, organizationID, teamID string) (string, bool, error) {
+		team, err := teamRepo.GetByID(ctx, organizationID, teamID)
+		if err != nil {
+			if errors.Is(err, tenancydomain.ErrTeamNotFound) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return team.Name, true, nil
+	})
+	serviceAccountNameReaderFunc := rbacapp.ServiceAccountNameReaderFunc(func(ctx context.Context, organizationID, serviceAccountID string) (string, bool, error) {
+		sa, err := serviceAccountRepo.GetByID(ctx, organizationID, serviceAccountID)
+		if err != nil {
+			if errors.Is(err, identitydomain.ErrServiceAccountNotFound) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return sa.Name, true, nil
+	})
+	projectNameReaderFunc := rbacapp.ProjectNameReaderFunc(func(ctx context.Context, organizationID, projectID string) (string, bool, error) {
+		project, err := projectRepo.GetByID(ctx, organizationID, projectID)
+		if err != nil {
+			if errors.Is(err, tenancydomain.ErrProjectNotFound) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return project.Name, true, nil
+	})
+	workspaceNameReaderFunc := rbacapp.WorkspaceNameReaderFunc(func(ctx context.Context, organizationID, workspaceID string) (string, bool, error) {
+		ws, err := workspaceRepo.GetByID(ctx, organizationID, workspaceID)
+		if err != nil {
+			if errors.Is(err, workspacedomain.ErrWorkspaceNotFound) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return ws.Name, true, nil
+	})
+	listRoleBindingsService := rbacapp.NewListRoleBindingsService(
+		roleBindingRepo, membershipRepo, roleRepo, userRepo,
+		teamNameReaderFunc, serviceAccountNameReaderFunc, projectNameReaderFunc, workspaceNameReaderFunc,
+	)
+
 	refreshTokenRepo := identitypg.NewRefreshTokenRepository(pool)
 	passwordResetTokenRepo := identitypg.NewPasswordResetTokenRepository(pool)
 	apiKeyRepo := identitypg.NewAPIKeyRepository(pool)
-	createUserService := identityapp.NewCreateUserService(userRepo)
-	getOwnUserService := identityapp.NewGetOwnUserService(userRepo)
-	authenticateService := identityapp.NewAuthenticateService(userRepo)
-	setPlatformAdminService := identityapp.NewSetPlatformAdminService(userRepo)
 	// createOrgService - Organization creation is gated on platform-admin
 	// status now (userRepo structurally satisfies both PlatformAdminChecker
 	// and PlatformAdminSetter, same "one adapter type satisfies many
 	// contexts' ports" reuse as roleBindingRepo elsewhere in this file) -
 	// constructed here, not with the rest of Tenancy's own wiring above,
-	// since it needs userRepo to exist first.
+	// since it needs userRepo to exist first. Also constructed before
+	// createUserService below, which needs it for the default-Organization
+	// bootstrap closure.
 	createOrgService := tenancyapp.NewCreateOrganizationService(orgRepo, membershipRepo, roleBindingRepo, rootMembershipRepo, userRepo, userRepo)
+	// defaultOrgBootstrapper bridges Identity's own DefaultOrganizationBootstrapper
+	// port to Tenancy's createOrgService - same "main.go bridges a call
+	// neither context can import directly" shape as
+	// secretMountCheckerFunc above. createOrgService.Execute's own
+	// first-Organization-ever check (rootMembership.CountOrganizations)
+	// will genuinely see 0 the first time this runs, so the platform-admin
+	// grant it already performs on that path needs no duplicating here.
+	defaultOrgBootstrapper := identityapp.DefaultOrganizationBootstrapperFunc(func(ctx context.Context, ownerUserID string) error {
+		_, err := createOrgService.Execute(ctx, tenancyapp.CreateOrganizationInput{
+			Name: "default", Slug: "default", CreatedByUserID: ownerUserID,
+		})
+		return err
+	})
+	createUserService := identityapp.NewCreateUserService(userRepo, defaultOrgBootstrapper)
+	getOwnUserService := identityapp.NewGetOwnUserService(userRepo)
+	authenticateService := identityapp.NewAuthenticateService(userRepo)
+	setPlatformAdminService := identityapp.NewSetPlatformAdminService(userRepo)
 	refreshTokenService := identityapp.NewRefreshTokenService(refreshTokenRepo, userRepo)
 	passwordResetService := identityapp.NewPasswordResetService(passwordResetTokenRepo, userRepo, logger)
 	createServiceAccountService := identityapp.NewCreateServiceAccountService(serviceAccountRepo, membershipRepo, roleBindingRepo)
@@ -373,6 +479,12 @@ func main() {
 	// happen to implement them, no explicit wiring beyond passing them
 	// in here).
 	listMembersService := tenancyapp.NewListMembersService(membershipRepo, userRepo, roleBindingRepo)
+	// listAvailableUsersService's UserReader port is the same userRepo
+	// structural-satisfaction reuse as listMembersService above.
+	listAvailableUsersService := tenancyapp.NewListAvailableUsersService(membershipRepo, roleBindingRepo, userRepo)
+	// listTeamMembersService's UserReader port is the same userRepo
+	// structural-satisfaction reuse as listMembersService above.
+	listTeamMembersService := tenancyapp.NewListTeamMembersService(teamRepo, membershipRepo, userRepo)
 
 	// The real API-key authentication path (docs/architecture/13-module-
 	// identity-rbac-tenancy.md §2) - httpserver.RequireAuth calls this for
@@ -422,16 +534,26 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.GetOrganizationHandler(getOrgService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.AddMemberHandler(addMemberService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListMembersHandler(listMembersService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/members/available", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListAvailableUsersHandler(listAvailableUsersService)))
 	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/role", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ChangeMemberRoleHandler(changeMemberRoleService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/block", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.BlockMemberHandler(blockMemberService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/members/{userID}/unblock", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.UnblockMemberHandler(unblockMemberService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/members/{userID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.RemoveMemberHandler(removeMemberService)))
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ArchiveOrganizationHandler(archiveOrganizationService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/hard-delete", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.DeleteOrganizationHandler(deleteOrganizationService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/teams", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateTeamHandler(createTeamService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/teams", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListTeamsHandler(listTeamsService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/teams/{team}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.AddTeamMemberHandler(addTeamMemberService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/teams/{team}/members", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListTeamMembersHandler(listTeamMembersService)))
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}/teams/{team}/members/{user_id}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.RemoveTeamMemberHandler(removeTeamMemberService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/teams/{team}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.UpdateTeamHandler(updateTeamService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/teams/{team}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.DeleteTeamHandler(deleteTeamService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/roles", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.CreateRoleHandler(createRoleService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/roles", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.ListRolesHandler(listRolesService)))
+	mux.HandleFunc("PUT /api/v1/orgs/{id}/roles/{role}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.UpdateRoleHandler(updateRoleService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/role-bindings", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.CreateRoleBindingHandler(createRoleBindingService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/role-bindings", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.ListRoleBindingsHandler(listRoleBindingsService)))
+	mux.HandleFunc("DELETE /api/v1/orgs/{id}/role-bindings/{bindingID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, rbachttp.DeleteRoleBindingHandler(deleteRoleBindingService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.CreateProjectHandler(createProjectService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.ListProjectsHandler(listProjectsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/projects/{projectID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, tenancyhttp.GetProjectHandler(getProjectService)))

@@ -15,11 +15,30 @@ func TestGetRunService_NonMemberGetsWorkspaceNotFoundNotForbidden(t *testing.T) 
 	membership := newFakeMembershipChecker()
 	workspaceChecker := newFakeWorkspaceChecker()
 	workspaceChecker.add(testOrgID, testProjectID, testWorkspaceID)
-	svc := application.NewGetRunService(runRepo, membership, workspaceChecker)
+	svc := application.NewGetRunService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
 
 	_, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, "run-1", "stranger")
 	if !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("expected ErrWorkspaceNotFound for a non-member, got: %v", err)
+	}
+}
+
+func TestGetRunService_RequiresVisibilityGrant(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	workspaceChecker := newFakeWorkspaceChecker()
+	workspaceChecker.add(testOrgID, testProjectID, testWorkspaceID)
+	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "member-1")
+	runRepo.put(run)
+
+	// A real member with no visibility grant at all no longer sees this
+	// Run by default (the whole point of this session's per-project
+	// visibility change).
+	svc := application.NewGetRunService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
+	if _, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, run.ID, "member-1"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without a visibility grant, got: %v", err)
 	}
 }
 
@@ -32,7 +51,9 @@ func TestGetRunService_RejectsRunFromAnotherWorkspace(t *testing.T) {
 	workspaceChecker.add(testOrgID, testProjectID, testWorkspaceID)
 	run, _ := domain.NewRun(testOrgID, "a-different-workspace", "member-1")
 	runRepo.put(run)
-	svc := application.NewGetRunService(runRepo, membership, workspaceChecker)
+	permChecker := newFakePermissionChecker()
+	permChecker.grant(testOrgID, "member-1", "organization:manage")
+	svc := application.NewGetRunService(runRepo, membership, workspaceChecker, permChecker, newFakeVisibilityChecker())
 
 	_, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, run.ID, "member-1")
 	if !errors.Is(err, domain.ErrRunNotFound) {
@@ -49,7 +70,9 @@ func TestGetRunService_Succeeds(t *testing.T) {
 	workspaceChecker.add(testOrgID, testProjectID, testWorkspaceID)
 	run, _ := domain.NewRun(testOrgID, testWorkspaceID, "member-1")
 	runRepo.put(run)
-	svc := application.NewGetRunService(runRepo, membership, workspaceChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(testOrgID, "member-1", "project:read", "project", testProjectID)
+	svc := application.NewGetRunService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), visibilityChecker)
 
 	got, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, run.ID, "member-1")
 	if err != nil {
@@ -71,7 +94,9 @@ func TestListRunsService_ScopedToWorkspace(t *testing.T) {
 	otherWorkspace, _ := domain.NewRun(testOrgID, "other-workspace", "member-1")
 	runRepo.put(inWorkspace)
 	runRepo.put(otherWorkspace)
-	svc := application.NewListRunsService(runRepo, membership, workspaceChecker)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(testOrgID, "member-1", "project:read", "project", testProjectID)
+	svc := application.NewListRunsService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), visibilityChecker)
 
 	got, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, "member-1")
 	if err != nil {
@@ -88,10 +113,25 @@ func TestListRunsService_NonMemberGetsWorkspaceNotFound(t *testing.T) {
 	membership := newFakeMembershipChecker()
 	workspaceChecker := newFakeWorkspaceChecker()
 	workspaceChecker.add(testOrgID, testProjectID, testWorkspaceID)
-	svc := application.NewListRunsService(runRepo, membership, workspaceChecker)
+	svc := application.NewListRunsService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
 
 	_, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, "stranger")
 	if !errors.Is(err, domain.ErrWorkspaceNotFound) {
 		t.Fatalf("expected ErrWorkspaceNotFound for a non-member, got: %v", err)
+	}
+}
+
+func TestListRunsService_ForbiddenWithoutVisibilityGrant(t *testing.T) {
+	locker := newFakeWorkspaceLocker()
+	runRepo := newFakeRunRepo(locker)
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	workspaceChecker := newFakeWorkspaceChecker()
+	workspaceChecker.add(testOrgID, testProjectID, testWorkspaceID)
+	svc := application.NewListRunsService(runRepo, membership, workspaceChecker, newFakePermissionChecker(), newFakeVisibilityChecker())
+
+	_, err := svc.Execute(context.Background(), testOrgID, testProjectID, testWorkspaceID, "member-1")
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without a visibility grant, got: %v", err)
 	}
 }

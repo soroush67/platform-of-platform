@@ -137,6 +137,61 @@ func TestTeamRepository_AddMemberIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTeamRepository_Create_DuplicateNameRejected(t *testing.T) {
+	teamRepo, org, _ := setupTeamTest(t)
+	ctx := context.Background()
+
+	team1, _ := domain.NewTeam(org.ID, "Platform Team")
+	if err := teamRepo.Create(ctx, team1); err != nil {
+		t.Fatalf("Create (first): %v", err)
+	}
+
+	team2, _ := domain.NewTeam(org.ID, "Platform Team")
+	err := teamRepo.Create(ctx, team2)
+	if !errors.Is(err, domain.ErrTeamAlreadyExists) {
+		t.Fatalf("expected ErrTeamAlreadyExists for a duplicate name in the same org, got: %v", err)
+	}
+}
+
+func TestTeamRepository_ListMembers(t *testing.T) {
+	teamRepo, org, _ := setupTeamTest(t)
+	ctx := context.Background()
+	root := dbtest.RootPool(t)
+
+	team, _ := domain.NewTeam(org.ID, "Platform Team")
+	if err := teamRepo.Create(ctx, team); err != nil {
+		t.Fatalf("Create team: %v", err)
+	}
+	otherTeam, _ := domain.NewTeam(org.ID, "Other Team")
+	if err := teamRepo.Create(ctx, otherTeam); err != nil {
+		t.Fatalf("Create other team: %v", err)
+	}
+
+	userID := insertUser(t, root)
+	otherUserID := insertUser(t, root)
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM team_memberships WHERE team_id IN ($1, $2)`, team.ID, otherTeam.ID)
+	})
+
+	if err := teamRepo.AddMember(ctx, domain.NewTeamMembership(team.ID, org.ID, userID)); err != nil {
+		t.Fatalf("AddMember (team, userID): %v", err)
+	}
+	// A membership on a DIFFERENT team must not leak into this team's
+	// own roster - the real point of this test (the query's own WHERE
+	// team_id = $1, not just "any membership in this org").
+	if err := teamRepo.AddMember(ctx, domain.NewTeamMembership(otherTeam.ID, org.ID, otherUserID)); err != nil {
+		t.Fatalf("AddMember (otherTeam, otherUserID): %v", err)
+	}
+
+	members, err := teamRepo.ListMembers(ctx, org.ID, team.ID)
+	if err != nil {
+		t.Fatalf("ListMembers: %v", err)
+	}
+	if len(members) != 1 || members[0].UserID != userID {
+		t.Errorf("expected exactly the one member of this team, got %+v", members)
+	}
+}
+
 func TestTeamRepository_RemoveMember(t *testing.T) {
 	teamRepo, org, _ := setupTeamTest(t)
 	ctx := context.Background()
@@ -162,5 +217,86 @@ func TestTeamRepository_RemoveMember(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected the membership row to be gone after RemoveMember, got count=%d", count)
+	}
+}
+
+func TestTeamRepository_Update_RenamesInPlace(t *testing.T) {
+	teamRepo, org, _ := setupTeamTest(t)
+	ctx := context.Background()
+
+	team, _ := domain.NewTeam(org.ID, "platfrom-mamanger")
+	if err := teamRepo.Create(ctx, team); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	team.Name = "platform-manager"
+	if err := teamRepo.Update(ctx, team); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got, err := teamRepo.GetByID(ctx, org.ID, team.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Name != "platform-manager" {
+		t.Errorf("expected the renamed name, got %q", got.Name)
+	}
+}
+
+func TestTeamRepository_Update_DuplicateNameRejected(t *testing.T) {
+	teamRepo, org, _ := setupTeamTest(t)
+	ctx := context.Background()
+
+	team1, _ := domain.NewTeam(org.ID, "team-one")
+	if err := teamRepo.Create(ctx, team1); err != nil {
+		t.Fatalf("Create team1: %v", err)
+	}
+	team2, _ := domain.NewTeam(org.ID, "team-two")
+	if err := teamRepo.Create(ctx, team2); err != nil {
+		t.Fatalf("Create team2: %v", err)
+	}
+
+	team2.Name = "team-one"
+	err := teamRepo.Update(ctx, team2)
+	if !errors.Is(err, domain.ErrTeamAlreadyExists) {
+		t.Fatalf("expected ErrTeamAlreadyExists renaming to an already-taken name, got: %v", err)
+	}
+}
+
+// TestTeamRepository_Delete_RemovesTeamAndItsOwnMemberships is the real
+// regression test for the FK problem this session found: deleting a
+// teams row before its team_memberships would hit a real constraint
+// violation (team_memberships.team_id has no ON DELETE CASCADE).
+func TestTeamRepository_Delete_RemovesTeamAndItsOwnMemberships(t *testing.T) {
+	teamRepo, org, _ := setupTeamTest(t)
+	ctx := context.Background()
+	root := dbtest.RootPool(t)
+
+	team, _ := domain.NewTeam(org.ID, "delete-me-team")
+	if err := teamRepo.Create(ctx, team); err != nil {
+		t.Fatalf("Create team: %v", err)
+	}
+	userID := insertUser(t, root)
+	t.Cleanup(func() {
+		mustExec(t, root, `DELETE FROM team_memberships WHERE team_id = $1`, team.ID)
+	})
+	if err := teamRepo.AddMember(ctx, domain.NewTeamMembership(team.ID, org.ID, userID)); err != nil {
+		t.Fatalf("AddMember: %v", err)
+	}
+
+	if err := teamRepo.Delete(ctx, org.ID, team.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if _, err := teamRepo.GetByID(ctx, org.ID, team.ID); !errors.Is(err, domain.ErrTeamNotFound) {
+		t.Errorf("expected the team to be gone, got: %v", err)
+	}
+
+	var membershipCount int
+	if err := root.QueryRow(ctx, `SELECT count(*) FROM team_memberships WHERE team_id = $1`, team.ID).Scan(&membershipCount); err != nil {
+		t.Fatalf("query team_memberships: %v", err)
+	}
+	if membershipCount != 0 {
+		t.Errorf("expected the team's own memberships to be gone too, got %d", membershipCount)
 	}
 }

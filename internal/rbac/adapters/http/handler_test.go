@@ -145,7 +145,9 @@ func TestListRoleBindingsHandler_Succeeds(t *testing.T) {
 	bindingRepo := newFakeRoleBindingRepo()
 	membership := newFakeMembershipChecker()
 	membership.add("org-1", "user-1")
-	svc := application.NewListRoleBindingsService(bindingRepo, membership)
+	roleRepo := newFakeRoleRepo()
+	nameReader := newFakeNameReader()
+	svc := application.NewListRoleBindingsService(bindingRepo, membership, roleRepo, newFakeUserReader(), nameReader, nameReader, nameReader, nameReader)
 	handler := withAuth(httpadapter.ListRoleBindingsHandler(svc))
 
 	req := authedRequest(t, "GET", "/api/v1/orgs/org-1/role-bindings", "user-1", nil)
@@ -155,5 +157,79 @@ func TestListRoleBindingsHandler_Succeeds(t *testing.T) {
 
 	if rec.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeleteRoleBindingHandler_Succeeds(t *testing.T) {
+	bindingRepo := newFakeRoleBindingRepo()
+	binding := domain.NewRoleBinding("org-1", "role-1", domain.SubjectTypeUser, "target-user", domain.ScopeTypeOrganization, "org-1", domain.EffectAllow)
+	bindingRepo.put(binding)
+	membership := newFakeMembershipChecker()
+	membership.add("org-1", "user-1")
+	permChecker := newFakePermissionChecker()
+	permChecker.grant("org-1", "user-1", "organization:manage")
+	svc := application.NewDeleteRoleBindingService(bindingRepo, membership, permChecker)
+	handler := withAuth(httpadapter.DeleteRoleBindingHandler(svc))
+
+	req := authedRequest(t, "DELETE", "/api/v1/orgs/org-1/role-bindings/"+binding.ID, "user-1", nil)
+	req.SetPathValue("id", "org-1")
+	req.SetPathValue("bindingID", binding.ID)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 204 {
+		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateRoleHandler_RejectsBuiltinRole(t *testing.T) {
+	roleRepo := newFakeRoleRepo()
+	builtin, _ := domain.NewRole("org-1", "owner", []domain.Permission{domain.PermissionOrganizationManage})
+	builtin.OrganizationID = nil
+	roleRepo.put(builtin)
+	membership := newFakeMembershipChecker()
+	membership.add("org-1", "user-1")
+	permChecker := newFakePermissionChecker()
+	permChecker.grant("org-1", "user-1", "organization:manage")
+	svc := application.NewUpdateRoleService(roleRepo, membership, permChecker)
+	handler := withAuth(httpadapter.UpdateRoleHandler(svc))
+
+	req := authedRequest(t, "PUT", "/api/v1/orgs/org-1/roles/"+builtin.ID, "user-1", []byte(`{"permissions":["workspace:read"]}`))
+	req.SetPathValue("id", "org-1")
+	req.SetPathValue("role", builtin.ID)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 403 {
+		t.Fatalf("expected 403 for a built-in role, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateRoleHandler_Succeeds(t *testing.T) {
+	roleRepo := newFakeRoleRepo()
+	role, _ := domain.NewRole("org-1", "deployer", []domain.Permission{domain.PermissionWorkspaceApply})
+	roleRepo.put(role)
+	membership := newFakeMembershipChecker()
+	membership.add("org-1", "user-1")
+	permChecker := newFakePermissionChecker()
+	permChecker.grant("org-1", "user-1", "organization:manage")
+	svc := application.NewUpdateRoleService(roleRepo, membership, permChecker)
+	handler := withAuth(httpadapter.UpdateRoleHandler(svc))
+
+	req := authedRequest(t, "PUT", "/api/v1/orgs/org-1/roles/"+role.ID, "user-1", []byte(`{"permissions":["workspace:read","workspace:manage"]}`))
+	req.SetPathValue("id", "org-1")
+	req.SetPathValue("role", role.ID)
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["permissions"] == nil {
+		t.Errorf("expected updated permissions in the response, got %+v", body)
 	}
 }

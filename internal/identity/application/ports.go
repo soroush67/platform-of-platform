@@ -18,6 +18,33 @@ type UserRepository interface {
 	// another user) - see the RBAC per-menu/org-creation redesign.
 	IsPlatformAdmin(ctx context.Context, userID string) (bool, error)
 	SetPlatformAdmin(ctx context.Context, userID string, isAdmin bool) error
+	// Count backs CreateUserService's own "is this the very first User
+	// ever" check (the same signal httpserver.RequireAuthOrFirstUserBootstrap
+	// uses to decide whether to let an unauthenticated request through -
+	// checked again here, independently, since the business rule "the
+	// first user gets a default Organization" belongs in the service, not
+	// smeared into HTTP wiring).
+	Count(ctx context.Context) (int, error)
+}
+
+// DefaultOrganizationBootstrapper is Identity's own port into Tenancy -
+// CreateUserService calls this exactly once, only when the user it just
+// created is the very first one ever, so a fresh install always has
+// somewhere real to land (the panel is per-Organization - a user with
+// zero Organizations has nowhere to go). Satisfied in main.go by a
+// closure wrapping tenancy/application.CreateOrganizationService's own
+// Execute (its first-Organization-ever bootstrap already grants
+// platform-admin as a side effect, so nothing about that needs
+// duplicating here) - same cross-context-bridge pattern as Variables'
+// own secretMountCheckerFunc.
+type DefaultOrganizationBootstrapper interface {
+	BootstrapDefaultOrganization(ctx context.Context, ownerUserID string) error
+}
+
+type DefaultOrganizationBootstrapperFunc func(ctx context.Context, ownerUserID string) error
+
+func (f DefaultOrganizationBootstrapperFunc) BootstrapDefaultOrganization(ctx context.Context, ownerUserID string) error {
+	return f(ctx, ownerUserID)
 }
 
 // RefreshTokenRepository is RefreshTokenService's own port - previously

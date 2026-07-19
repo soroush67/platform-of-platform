@@ -82,6 +82,14 @@ type ScopedPermissionChecker interface {
 	HasPermissionAtScope(ctx context.Context, organizationID, userID, permission string, projectID, workspaceID *string) (bool, error)
 }
 
+// VisibilityChecker - this context's own copy of Tenancy/Workspace's
+// identically-shaped port (see Tenancy's ports.go for why this is a
+// distinct primitive from ScopedPermissionChecker above, not a naming
+// variant of it - ListRunsService/GetRunService use this one).
+type VisibilityChecker interface {
+	HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error)
+}
+
 // OrganizationChecker - this context's port into Tenancy for "is this
 // Organization archived" (docs/architecture/13-module-identity-rbac-
 // tenancy.md §1). TriggerRunService checks this before creating a new

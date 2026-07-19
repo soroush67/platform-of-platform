@@ -35,6 +35,14 @@ type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
 
+// VisibilityChecker - this context's own copy of Tenancy's identically-
+// shaped port (ports.go there has its own doc comment on why this is a
+// distinct primitive from ScopedPermissionChecker/HasPermissionAtScope
+// below, not just a naming variant of it).
+type VisibilityChecker interface {
+	HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error)
+}
+
 // ScopedPermissionChecker - same reasoning as execution's own copy
 // (internal/execution/application/ports.go): a RoleBinding at project
 // scope should grant workspace:manage for Workspaces/Environments

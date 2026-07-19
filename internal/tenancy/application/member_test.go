@@ -163,3 +163,147 @@ func TestListMembersService_MemberWithNoRoleBindingShowsEmptyRole(t *testing.T) 
 		t.Errorf("expected exactly one roster row with an empty role name, not an error, got %+v", got)
 	}
 }
+
+func TestBlockMemberService_RequiresOrganizationManage(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "member-1")
+	membershipRepo.add(org.ID, "target-user")
+	svc := application.NewBlockMemberService(membershipRepo, newFakePermChecker())
+
+	err := svc.Execute(context.Background(), application.BlockMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "member-1", TargetUserID: "target-user",
+	})
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without organization:manage, got: %v", err)
+	}
+	if membershipRepo.isBlocked(org.ID, "target-user") {
+		t.Error("expected the target to remain unblocked after a forbidden attempt")
+	}
+}
+
+func TestBlockMemberService_BlocksTarget(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin-1")
+	membershipRepo.add(org.ID, "target-user")
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin-1", "organization:manage")
+	svc := application.NewBlockMemberService(membershipRepo, permChecker)
+
+	if err := svc.Execute(context.Background(), application.BlockMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "admin-1", TargetUserID: "target-user",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !membershipRepo.isBlocked(org.ID, "target-user") {
+		t.Error("expected the target to be blocked")
+	}
+
+	// A blocked member fails IsMember identically to a non-member - the
+	// whole mechanism BlockMemberService's own doc comment describes.
+	isMember, _ := membershipRepo.IsMember(context.Background(), org.ID, "target-user")
+	if isMember {
+		t.Error("expected IsMember to return false for a blocked member")
+	}
+	// But the membership row itself still exists - a blocked member is
+	// not the same as a removed one.
+	if !membershipRepo.exists(org.ID, "target-user") {
+		t.Error("expected the membership row to still exist after blocking")
+	}
+}
+
+func TestUnblockMemberService_UnblocksAnAlreadyBlockedTarget(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin-1")
+	membershipRepo.add(org.ID, "target-user")
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin-1", "organization:manage")
+	blockSvc := application.NewBlockMemberService(membershipRepo, permChecker)
+	if err := blockSvc.Execute(context.Background(), application.BlockMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "admin-1", TargetUserID: "target-user",
+	}); err != nil {
+		t.Fatalf("Block Execute: %v", err)
+	}
+
+	// Regression check for the exact bug the plan called out: a naive
+	// target-validation using IsMember (blocked-aware) would make an
+	// already-blocked target permanently unblockable, since IsMember
+	// itself now returns false for them.
+	unblockSvc := application.NewUnblockMemberService(membershipRepo, permChecker)
+	if err := unblockSvc.Execute(context.Background(), application.UnblockMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "admin-1", TargetUserID: "target-user",
+	}); err != nil {
+		t.Fatalf("expected unblocking an already-blocked target to succeed, got: %v", err)
+	}
+	if membershipRepo.isBlocked(org.ID, "target-user") {
+		t.Error("expected the target to be unblocked")
+	}
+}
+
+func TestRemoveMemberService_RequiresOrganizationManage(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "member-1")
+	membershipRepo.add(org.ID, "target-user")
+	cleaner := newFakeRoleBindingCleaner()
+	svc := application.NewRemoveMemberService(membershipRepo, newFakePermChecker(), cleaner)
+
+	err := svc.Execute(context.Background(), application.RemoveMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "member-1", TargetUserID: "target-user",
+	})
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without organization:manage, got: %v", err)
+	}
+	if !membershipRepo.exists(org.ID, "target-user") {
+		t.Error("expected the membership to still exist after a forbidden attempt")
+	}
+}
+
+func TestRemoveMemberService_RemovesMembershipAndCleansUpRoleBindings(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin-1")
+	membershipRepo.add(org.ID, "target-user")
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin-1", "organization:manage")
+	cleaner := newFakeRoleBindingCleaner()
+	svc := application.NewRemoveMemberService(membershipRepo, permChecker, cleaner)
+
+	if err := svc.Execute(context.Background(), application.RemoveMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "admin-1", TargetUserID: "target-user",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if membershipRepo.exists(org.ID, "target-user") {
+		t.Error("expected the membership row to be gone")
+	}
+	if !cleaner.calledFor(org.ID, "user", "target-user") {
+		t.Error("expected RoleBindingCleaner.DeleteForSubject to be called for the removed user")
+	}
+}
+
+func TestRemoveMemberService_AlreadyBlockedTargetCanStillBeRemoved(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin-1")
+	membershipRepo.add(org.ID, "target-user")
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin-1", "organization:manage")
+	if err := application.NewBlockMemberService(membershipRepo, permChecker).Execute(context.Background(), application.BlockMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "admin-1", TargetUserID: "target-user",
+	}); err != nil {
+		t.Fatalf("Block Execute: %v", err)
+	}
+
+	svc := application.NewRemoveMemberService(membershipRepo, permChecker, newFakeRoleBindingCleaner())
+	if err := svc.Execute(context.Background(), application.RemoveMemberInput{
+		OrganizationID: org.ID, RequestingUserID: "admin-1", TargetUserID: "target-user",
+	}); err != nil {
+		t.Fatalf("expected removing an already-blocked member to succeed, got: %v", err)
+	}
+	if membershipRepo.exists(org.ID, "target-user") {
+		t.Error("expected the membership row to be gone")
+	}
+}

@@ -153,6 +153,43 @@ a:hover {
   color: var(--primary);
 }
 
+.sidebar-nav-group {
+  margin-top: 4px;
+}
+
+.sidebar-nav-group-header {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px 8px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: var(--radius);
+}
+
+.sidebar-nav-group-header:hover {
+  background: var(--bg-panel-2);
+  color: var(--text);
+}
+
+.sidebar-nav-group-caret {
+  font-size: 10px;
+}
+
+.sidebar-nav-group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+}
+
 .sidebar-user {
   padding: 12px;
   border-top: 1px solid var(--border);

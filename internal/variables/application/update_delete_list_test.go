@@ -149,11 +149,31 @@ func TestDeleteVariableService_Succeeds(t *testing.T) {
 func TestListVariablesService_NonMemberGetsScopeNotFound(t *testing.T) {
 	repo := newFakeVariableRepo()
 	membership := newFakeMembershipChecker()
-	svc := application.NewListVariablesService(repo, membership)
+	svc := application.NewListVariablesService(repo, membership, newFakePermissionChecker(), newFakeVisibilityChecker(), newFakeWorkspaceChecker(), newFakeEnvironmentProjectResolver())
 
 	_, err := svc.Execute(context.Background(), testOrgID, "stranger", domain.ScopeTypeOrganization, testOrgID)
 	if !errors.Is(err, domain.ErrScopeNotFound) {
 		t.Fatalf("expected ErrScopeNotFound for a non-member, got: %v", err)
+	}
+}
+
+func TestListVariablesService_OrganizationScopeStaysMembershipOnly(t *testing.T) {
+	repo := newFakeVariableRepo()
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	v := mustVariable(t, domain.ScopeTypeOrganization, testOrgID, "FOO")
+	repo.put(v)
+	// No organization:manage, no project-scope grant at all - org-scoped
+	// Variables stay visible to every member regardless (genuinely
+	// org-wide config, not Project-specific - see project_visibility.go).
+	svc := application.NewListVariablesService(repo, membership, newFakePermissionChecker(), newFakeVisibilityChecker(), newFakeWorkspaceChecker(), newFakeEnvironmentProjectResolver())
+
+	got, err := svc.Execute(context.Background(), testOrgID, "member-1", domain.ScopeTypeOrganization, testOrgID)
+	if err != nil {
+		t.Fatalf("expected org-scoped Variables to stay membership-only, got: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != v.ID {
+		t.Errorf("expected the org-scoped variable, got %+v", got)
 	}
 }
 
@@ -165,7 +185,9 @@ func TestListVariablesService_ScopedToExactly(t *testing.T) {
 	otherScope := mustVariable(t, domain.ScopeTypeProject, "other-project", "B")
 	repo.put(inScope)
 	repo.put(otherScope)
-	svc := application.NewListVariablesService(repo, membership)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(testOrgID, "member-1", "project:read", "project", testProjectID)
+	svc := application.NewListVariablesService(repo, membership, newFakePermissionChecker(), visibilityChecker, newFakeWorkspaceChecker(), newFakeEnvironmentProjectResolver())
 
 	got, err := svc.Execute(context.Background(), testOrgID, "member-1", domain.ScopeTypeProject, testProjectID)
 	if err != nil {
@@ -173,5 +195,40 @@ func TestListVariablesService_ScopedToExactly(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ID != inScope.ID {
 		t.Errorf("expected exactly the one variable in this scope, got %+v", got)
+	}
+}
+
+func TestListVariablesService_ProjectScopeForbiddenWithoutGrant(t *testing.T) {
+	repo := newFakeVariableRepo()
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	v := mustVariable(t, domain.ScopeTypeProject, testProjectID, "A")
+	repo.put(v)
+	svc := application.NewListVariablesService(repo, membership, newFakePermissionChecker(), newFakeVisibilityChecker(), newFakeWorkspaceChecker(), newFakeEnvironmentProjectResolver())
+
+	_, err := svc.Execute(context.Background(), testOrgID, "member-1", domain.ScopeTypeProject, testProjectID)
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without a project-scope grant, got: %v", err)
+	}
+}
+
+func TestListVariablesService_WorkspaceScopeResolvesProjectViaWorkspaceChecker(t *testing.T) {
+	repo := newFakeVariableRepo()
+	membership := newFakeMembershipChecker()
+	membership.add(testOrgID, "member-1")
+	v := mustVariable(t, domain.ScopeTypeWorkspace, testWorkspaceID, "A")
+	repo.put(v)
+	workspaceChecker := newFakeWorkspaceChecker()
+	workspaceChecker.add(testOrgID, testWorkspaceID, testProjectID, nil)
+	visibilityChecker := newFakeVisibilityChecker()
+	visibilityChecker.grant(testOrgID, "member-1", "project:read", "project", testProjectID)
+	svc := application.NewListVariablesService(repo, membership, newFakePermissionChecker(), visibilityChecker, workspaceChecker, newFakeEnvironmentProjectResolver())
+
+	got, err := svc.Execute(context.Background(), testOrgID, "member-1", domain.ScopeTypeWorkspace, testWorkspaceID)
+	if err != nil {
+		t.Fatalf("expected a project-scope grant on the workspace's own project to allow it, got: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != v.ID {
+		t.Errorf("expected the workspace-scoped variable, got %+v", got)
 	}
 }

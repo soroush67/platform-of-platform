@@ -40,7 +40,22 @@ type MembershipRepository interface {
 	IsMember(ctx context.Context, organizationID, userID string) (bool, error)
 	// ListByOrganization backs the member roster (ListMembersService) -
 	// same shape/reasoning as ProjectRepository.ListByOrganization below.
+	// Deliberately NOT filtered by blocked_at - an admin must still see
+	// a blocked member (with a real "blocked" badge) to be able to
+	// unblock them.
 	ListByOrganization(ctx context.Context, organizationID string) ([]*domain.OrganizationMembership, error)
+	// MembershipExists is IsMember's blocked-agnostic sibling - target-
+	// validation for Block/Unblock/RemoveMember needs "does this
+	// membership row exist at all," not "is it currently usable" (IsMember
+	// would incorrectly say a blocked target isn't a member at all,
+	// making them impossible to ever unblock or remove through their own
+	// target-validation check).
+	MembershipExists(ctx context.Context, organizationID, userID string) (bool, error)
+	// SetBlocked backs BlockMemberService/UnblockMemberService.
+	SetBlocked(ctx context.Context, organizationID, userID string, blocked bool) error
+	// Delete backs RemoveMemberService - a real, permanent removal of
+	// this membership.
+	Delete(ctx context.Context, organizationID, userID string) error
 }
 
 // UserReader and RoleReader are Tenancy's own ports into Identity and
@@ -56,6 +71,13 @@ type MembershipRepository interface {
 // pattern rather than inventing a new one.
 type UserReader interface {
 	GetUser(ctx context.Context, userID string) (username, email string, found bool, err error)
+	// ListAll returns every platform User (id, username, email) - backs
+	// ListAvailableUsersService's "which Users aren't in this org yet"
+	// computation. Anonymous struct, not a named type, so the identity
+	// adapter satisfying this doesn't need to import this package -
+	// same structural-typing trick GetUser's primitive-only signature
+	// above already uses to dodge the cross-context import ban.
+	ListAll(ctx context.Context) ([]struct{ ID, Username, Email string }, error)
 }
 
 // RoleReader.GetOrgScopeRoleName mirrors RoleChanger.ReplaceRole's own
@@ -89,6 +111,28 @@ type RoleChanger interface {
 
 type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
+}
+
+// RoleBindingCleaner is Tenancy's port into RBAC's own
+// RoleBindingRepository.DeleteForSubject - DeleteTeamService/
+// RemoveMemberService both call this before the subject itself
+// (a Team row, or an organization_memberships row) is gone, so no
+// RoleBinding is ever left dangling, pointing at a Team or a User no
+// longer in this org.
+type RoleBindingCleaner interface {
+	DeleteForSubject(ctx context.Context, organizationID, subjectType, subjectID string) error
+}
+
+// VisibilityChecker backs the new per-Project visibility gate
+// (ListProjectsService/GetProjectService) - deliberately a different
+// port than PermissionChecker/ScopedPermissionChecker-style checks used
+// elsewhere: HasScopedPermission (internal/rbac/adapters/postgres/
+// role_binding_repository.go) has no organization-scope fallback, so a
+// Team/User must be bound at exactly this Project's own scope to pass -
+// see canAccessProject in list_projects.go for the Owner/Admin bypass
+// this is composed with.
+type VisibilityChecker interface {
+	HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error)
 }
 
 // RootMembershipRepository is a deliberately separate port from

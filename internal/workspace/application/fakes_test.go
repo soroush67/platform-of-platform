@@ -142,6 +142,33 @@ func (f *fakePermissionChecker) grant(orgID, userID, permission string) {
 	f.perms[orgID+"|"+userID+"|"+permission] = true
 }
 
+// fakeVisibilityChecker backs the new VisibilityChecker port
+// (project_visibility.go) - deliberately separate from
+// fakePermissionChecker above (a grant here is scoped to an exact
+// (permission, scopeType, scopeID) tuple, no organization-scope
+// fallback, matching the real HasScopedPermission's own narrower
+// contract).
+type fakeVisibilityChecker struct {
+	mu     sync.Mutex
+	grants map[string]bool
+}
+
+func newFakeVisibilityChecker() *fakeVisibilityChecker {
+	return &fakeVisibilityChecker{grants: map[string]bool{}}
+}
+
+func (f *fakeVisibilityChecker) HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.grants[organizationID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID], nil
+}
+
+func (f *fakeVisibilityChecker) grant(orgID, userID, permission, scopeType, scopeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.grants[orgID+"|"+userID+"|"+permission+"|"+scopeType+"|"+scopeID] = true
+}
+
 type fakeProjectChecker struct {
 	mu       sync.Mutex
 	projects map[string]bool

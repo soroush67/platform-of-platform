@@ -12,7 +12,7 @@ import (
 )
 
 func TestCreateUserService_LocalUserRequiresPassword(t *testing.T) {
-	svc := application.NewCreateUserService(newFakeUserRepo())
+	svc := application.NewCreateUserService(newFakeUserRepo(), newFakeDefaultOrgBootstrapper())
 
 	_, err := svc.Execute(context.Background(), application.CreateUserInput{
 		Username: "alice", Email: "alice@example.com", AuthSource: domain.AuthSourceLocal,
@@ -25,7 +25,7 @@ func TestCreateUserService_LocalUserRequiresPassword(t *testing.T) {
 
 func TestCreateUserService_LocalUserGetsARealBcryptHashNotPlaintext(t *testing.T) {
 	repo := newFakeUserRepo()
-	svc := application.NewCreateUserService(repo)
+	svc := application.NewCreateUserService(repo, newFakeDefaultOrgBootstrapper())
 
 	user, err := svc.Execute(context.Background(), application.CreateUserInput{
 		Username: "alice", Email: "alice@example.com", AuthSource: domain.AuthSourceLocal, Password: "correct horse battery staple",
@@ -46,7 +46,7 @@ func TestCreateUserService_LocalUserGetsARealBcryptHashNotPlaintext(t *testing.T
 
 func TestCreateUserService_SSOUserNeedsNoPassword(t *testing.T) {
 	repo := newFakeUserRepo()
-	svc := application.NewCreateUserService(repo)
+	svc := application.NewCreateUserService(repo, newFakeDefaultOrgBootstrapper())
 
 	user, err := svc.Execute(context.Background(), application.CreateUserInput{
 		Username: "bob", Email: "bob@example.com", AuthSource: domain.AuthSourceOIDC,
@@ -56,6 +56,42 @@ func TestCreateUserService_SSOUserNeedsNoPassword(t *testing.T) {
 	}
 	if user.PasswordHash != nil {
 		t.Error("expected no password hash for an SSO user")
+	}
+}
+
+func TestCreateUserService_FirstUserEverBootstrapsADefaultOrganization(t *testing.T) {
+	repo := newFakeUserRepo()
+	bootstrapper := newFakeDefaultOrgBootstrapper()
+	svc := application.NewCreateUserService(repo, bootstrapper)
+
+	user, err := svc.Execute(context.Background(), application.CreateUserInput{
+		Username: "first", Email: "first@example.com", AuthSource: domain.AuthSourceOIDC,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if bootstrapper.callCount() != 1 {
+		t.Fatalf("expected the default-Organization bootstrap to be called exactly once for the first user, got %d calls", bootstrapper.callCount())
+	}
+	if bootstrapper.calls[0] != user.ID {
+		t.Errorf("expected the bootstrap call to be made with the new user's own id, got %q", bootstrapper.calls[0])
+	}
+}
+
+func TestCreateUserService_SubsequentUsersDoNotBootstrapAnOrganization(t *testing.T) {
+	repo := newFakeUserRepo()
+	repo.put(mustLocalUser(t, "existing", "hunter2"))
+	bootstrapper := newFakeDefaultOrgBootstrapper()
+	svc := application.NewCreateUserService(repo, bootstrapper)
+
+	_, err := svc.Execute(context.Background(), application.CreateUserInput{
+		Username: "second", Email: "second@example.com", AuthSource: domain.AuthSourceOIDC,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if bootstrapper.callCount() != 0 {
+		t.Fatalf("expected no bootstrap call once a User already exists, got %d calls", bootstrapper.callCount())
 	}
 }
 

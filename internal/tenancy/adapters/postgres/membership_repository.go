@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -58,6 +59,14 @@ func (r *MembershipRepository) Create(ctx context.Context, m *domain.Organizatio
 // is), so without this second check, every existing service's IsMember
 // gate would reject a real, valid, API-key-authenticated ServiceAccount
 // principal outright, before RBAC's own permission check ever ran.
+//
+// The organization_memberships branch also requires blocked_at IS NULL
+// - this one query is the choke point nearly every permission check in
+// every context already calls first, so a blocked member fails every
+// existing gate identically to a real non-member, with zero changes
+// needed anywhere else (BlockMemberService's own doc comment). The
+// service_accounts branch is deliberately untouched - blocking is a
+// human-membership concept only, not extended to ServiceAccounts here.
 func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, subjectID string) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -71,7 +80,7 @@ func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, sub
 
 	var exists bool
 	err = tx.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND user_id = $2)
+		`SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND user_id = $2 AND blocked_at IS NULL)
 		    OR EXISTS(SELECT 1 FROM service_accounts WHERE organization_id = $1 AND id = $2)`,
 		organizationID, subjectID,
 	).Scan(&exists)
@@ -80,6 +89,85 @@ func (r *MembershipRepository) IsMember(ctx context.Context, organizationID, sub
 	}
 
 	return exists, tx.Commit(ctx)
+}
+
+// MembershipExists is IsMember's blocked-agnostic sibling - see the
+// port's own doc comment (ports.go) for why target-validation in
+// Block/Unblock/RemoveMember needs this instead.
+func (r *MembershipRepository) MembershipExists(ctx context.Context, organizationID, userID string) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err = tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM organization_memberships WHERE organization_id = $1 AND user_id = $2)`,
+		organizationID, userID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, tx.Commit(ctx)
+}
+
+// SetBlocked backs BlockMemberService/UnblockMemberService - blocked=true
+// sets blocked_at to now(), blocked=false clears it back to NULL.
+func (r *MembershipRepository) SetBlocked(ctx context.Context, organizationID, userID string, blocked bool) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	var blockedAt any
+	if blocked {
+		blockedAt = time.Now().UTC()
+	}
+
+	_, err = tx.Exec(ctx,
+		`UPDATE organization_memberships SET blocked_at = $1 WHERE organization_id = $2 AND user_id = $3`,
+		blockedAt, organizationID, userID,
+	)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// Delete backs RemoveMemberService - a real, permanent removal of this
+// User's membership in this org (the operator's own scoped "Delete"
+// meaning). RemoveMemberService itself is what cleans up this User's
+// RoleBindings first, via RoleBindingCleaner - this method only ever
+// touches organization_memberships.
+func (r *MembershipRepository) Delete(ctx context.Context, organizationID, userID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	_, err = tx.Exec(ctx, `DELETE FROM organization_memberships WHERE organization_id = $1 AND user_id = $2`, organizationID, userID)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 // ListByOrganization backs the member roster (ListMembersService,
@@ -97,7 +185,7 @@ func (r *MembershipRepository) ListByOrganization(ctx context.Context, organizat
 	}
 
 	rows, err := tx.Query(ctx,
-		`SELECT id, organization_id, user_id, joined_at FROM organization_memberships WHERE organization_id = $1 ORDER BY joined_at`,
+		`SELECT id, organization_id, user_id, joined_at, blocked_at FROM organization_memberships WHERE organization_id = $1 ORDER BY joined_at`,
 		organizationID,
 	)
 	if err != nil {
@@ -108,7 +196,7 @@ func (r *MembershipRepository) ListByOrganization(ctx context.Context, organizat
 	var memberships []*domain.OrganizationMembership
 	for rows.Next() {
 		m := &domain.OrganizationMembership{}
-		if err := rows.Scan(&m.ID, &m.OrganizationID, &m.UserID, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.OrganizationID, &m.UserID, &m.JoinedAt, &m.BlockedAt); err != nil {
 			return nil, err
 		}
 		memberships = append(memberships, m)

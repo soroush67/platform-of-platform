@@ -45,15 +45,6 @@ export function App() {
       />
 
       <Route
-        path="/platform-admin"
-        element={
-          <RequireAuth>
-            <PlatformAdminPage />
-          </RequireAuth>
-        }
-      />
-
-      <Route
         path="/orgs/:orgId"
         element={
           <RequireAuth>
@@ -62,6 +53,7 @@ export function App() {
         }
       >
         <Route index element={<OrgOverviewPage />} />
+        <Route path="platform-admin" element={<PlatformAdminPage />} />
         <Route path="projects" element={<ProjectListPage />} />
         <Route path="projects/:projectId" element={<ProjectDetailPage />} />
         <Route path="projects/:projectId/environments/:envId" element={<EnvironmentDetailPage />} />

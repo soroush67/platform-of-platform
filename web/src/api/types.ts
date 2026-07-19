@@ -102,6 +102,29 @@ export interface Member {
   email: string;
   role_name: string;
   joined_at: string;
+  // blocked - per-organization suspension only (BlockMemberService) -
+  // the member stays a real platform user and keeps working in any
+  // other org they belong to.
+  blocked: boolean;
+}
+
+// AvailableUser is a platform User not yet a member of the org the
+// Members page is currently showing - GET /orgs/{id}/members/available's
+// own response shape, backs the "add existing user" picker.
+export interface AvailableUser {
+  id: string;
+  username: string;
+  email: string;
+}
+
+// TeamMember is Member's own sibling for a Team's roster - no role_name
+// (Team membership itself carries no per-team role, see
+// TeamMemberSummary's own comment server-side).
+export interface TeamMember {
+  user_id: string;
+  username: string;
+  email: string;
+  joined_at: string;
 }
 
 // ---- RBAC ----
@@ -131,6 +154,41 @@ export const PERMISSIONS = [
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
+// PERMISSION_GROUP_LABELS/PERMISSION_GROUPS - RolesPage's grouped
+// checkbox UI needs permissions bucketed by resource (the part before
+// ":"), matching the exact same one-permission-pair-per-menu split
+// AllPermissions itself already documents (server-side comment above) -
+// derived from PERMISSIONS itself, not a second hand-maintained list.
+const PERMISSION_GROUP_LABELS: Record<string, string> = {
+  organization: "Organization",
+  project: "Projects",
+  workspace: "Workspaces",
+  machine: "Machines",
+  network_volume: "Networks & volumes",
+  compose_file: "Compose files",
+  operation: "Operations",
+};
+
+export interface PermissionGroup {
+  key: string;
+  label: string;
+  permissions: Permission[];
+}
+
+export const PERMISSION_GROUPS: PermissionGroup[] = (() => {
+  const order: string[] = [];
+  const byKey = new Map<string, Permission[]>();
+  for (const p of PERMISSIONS) {
+    const key = p.split(":")[0];
+    if (!byKey.has(key)) {
+      byKey.set(key, []);
+      order.push(key);
+    }
+    byKey.get(key)!.push(p);
+  }
+  return order.map((key) => ({ key, label: PERMISSION_GROUP_LABELS[key] ?? key, permissions: byKey.get(key)! }));
+})();
+
 export interface Role {
   id: string;
   organization_id: string | null;
@@ -138,14 +196,22 @@ export interface Role {
   permissions: string[];
 }
 
+// RoleBinding - *_name fields are resolved server-side
+// (ListRoleBindingsService, list_role_bindings.go) - "" when
+// unresolvable (a since-deleted resource) or when scope_type is
+// "organization" (no lookup needed for that one case, see
+// RoleBindingsPage's own handling).
 export interface RoleBinding {
   id: string;
   organization_id: string;
   role_id: string;
+  role_name: string;
   subject_type: string;
   subject_id: string;
+  subject_name: string;
   scope_type: string;
   scope_id: string;
+  scope_name: string;
   effect: string;
   created_at: string;
 }

@@ -89,6 +89,14 @@ func (f *fakeRoleRepo) put(role *domain.Role) {
 	f.roles[role.ID] = &cp
 }
 
+func (f *fakeRoleRepo) Update(ctx context.Context, role *domain.Role) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *role
+	f.roles[role.ID] = &cp
+	return nil
+}
+
 type fakeRoleBindingRepo struct {
 	mu       sync.Mutex
 	bindings []*domain.RoleBinding
@@ -119,6 +127,25 @@ func (f *fakeRoleBindingRepo) ListForSubject(ctx context.Context, organizationID
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+func (f *fakeRoleBindingRepo) Delete(ctx context.Context, organizationID, bindingID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, b := range f.bindings {
+		if b.ID == bindingID && b.OrganizationID == organizationID {
+			f.bindings = append(f.bindings[:i], f.bindings[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (f *fakeRoleBindingRepo) put(binding *domain.RoleBinding) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := *binding
+	f.bindings = append(f.bindings, &cp)
 }
 
 type fakeMembershipChecker struct {
@@ -199,4 +226,64 @@ func (f *fakeResourceChecker) add(orgID, id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.exists[orgID+"|"+id] = true
+}
+
+// fakeUserReader/fakeNameReader back ListRoleBindingsService's new
+// display-name resolution ports - same shape as the application-layer
+// tests' own copies (a different package, can't share the type
+// directly).
+type fakeUserReader struct {
+	mu    sync.Mutex
+	users map[string][2]string
+}
+
+func newFakeUserReader() *fakeUserReader { return &fakeUserReader{users: map[string][2]string{}} }
+
+func (f *fakeUserReader) GetUser(ctx context.Context, userID string) (string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u, ok := f.users[userID]
+	if !ok {
+		return "", "", false, nil
+	}
+	return u[0], u[1], true, nil
+}
+
+func (f *fakeUserReader) set(userID, username, email string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.users[userID] = [2]string{username, email}
+}
+
+type fakeNameReader struct {
+	mu    sync.Mutex
+	names map[string]string
+}
+
+func newFakeNameReader() *fakeNameReader { return &fakeNameReader{names: map[string]string{}} }
+
+func (f *fakeNameReader) get(organizationID, id string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	name, ok := f.names[organizationID+"|"+id]
+	if !ok {
+		return "", false, nil
+	}
+	return name, true, nil
+}
+
+func (f *fakeNameReader) GetTeamName(ctx context.Context, organizationID, teamID string) (string, bool, error) {
+	return f.get(organizationID, teamID)
+}
+
+func (f *fakeNameReader) GetServiceAccountName(ctx context.Context, organizationID, serviceAccountID string) (string, bool, error) {
+	return f.get(organizationID, serviceAccountID)
+}
+
+func (f *fakeNameReader) GetProjectName(ctx context.Context, organizationID, projectID string) (string, bool, error) {
+	return f.get(organizationID, projectID)
+}
+
+func (f *fakeNameReader) GetWorkspaceName(ctx context.Context, organizationID, workspaceID string) (string, bool, error) {
+	return f.get(organizationID, workspaceID)
 }

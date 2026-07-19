@@ -61,6 +61,36 @@ type PermissionChecker interface {
 	HasPermission(ctx context.Context, organizationID, userID, permission string) (bool, error)
 }
 
+// VisibilityChecker - this context's own copy of Tenancy/Workspace/
+// Execution's identically-shaped port (see Tenancy's ports.go for why
+// this is a distinct primitive, not a naming variant of
+// HasPermissionAtScope-style checks). ListVariablesService uses this to
+// gate project/environment/workspace-scoped Variables the same way
+// their owning Project is gated - organization-scoped Variables stay
+// membership-only (genuinely org-wide config, not Project-specific).
+type VisibilityChecker interface {
+	HasScopedPermission(ctx context.Context, organizationID, userID, permission, scopeType, scopeID string) (bool, error)
+}
+
+// EnvironmentProjectResolver resolves an environment-scoped Variable's
+// scope_id back to its owning Project id, the same way WorkspaceChecker.
+// GetScope already does for workspace-scoped Variables - needed only for
+// the new per-Project visibility gate (ListVariablesService), since
+// Environment isn't otherwise looked up anywhere in this context.
+// Environment.ProjectID already exists directly on the Workspace
+// context's own Environment row - this is a thin resolver over that,
+// wired in main.go the same *Func-adapts-a-method-value way
+// SecretMountCheckerFunc below already does.
+type EnvironmentProjectResolver interface {
+	ProjectIDForEnvironment(ctx context.Context, organizationID, environmentID string) (string, error)
+}
+
+type EnvironmentProjectResolverFunc func(ctx context.Context, organizationID, environmentID string) (string, error)
+
+func (f EnvironmentProjectResolverFunc) ProjectIDForEnvironment(ctx context.Context, organizationID, environmentID string) (string, error) {
+	return f(ctx, organizationID, environmentID)
+}
+
 // SecretMountChecker - Variables never imports secrets/domain (this
 // codebase's no-cross-context-import rule), so CreateVariableService
 // verifies a secret_ref's mount_id resolves to a real
