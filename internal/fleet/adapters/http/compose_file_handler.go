@@ -123,6 +123,21 @@ func UpdateComposeFileContentHandler(svc *application.UpdateComposeFileContentSe
 	}
 }
 
+func DeleteComposeFileHandler(svc *application.DeleteComposeFileService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		if err := svc.Execute(r.Context(), r.PathValue("id"), userID, r.PathValue("composeFileID")); err != nil {
+			writeFleetError(w, err, "compose file not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // ---- attachments ----
 
 type attachNetworkRequest struct {
@@ -223,6 +238,106 @@ func DetachVolumeHandler(svc *application.AttachmentService) http.HandlerFunc {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// ListProjectComposeFilesHandler implements `GET /api/v1/orgs/{id}/
+// projects/{projectID}/compose-files` - mounted alongside Tenancy's/
+// Workspace's own routes under the same `/projects/{projectID}/...`
+// path prefix (no cross-context Go dependency, just another handler on
+// that path, same pattern Workspace's own routes already use).
+func ListProjectComposeFilesHandler(svc *application.AttachmentService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		files, err := svc.ListComposeFilesForProject(r.Context(), r.PathValue("id"), userID, r.PathValue("projectID"))
+		if err != nil {
+			writeFleetError(w, err, "")
+			return
+		}
+		responses := make([]composeFileResponse, 0, len(files))
+		for _, c := range files {
+			responses = append(responses, toComposeFileResponse(c))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
+	}
+}
+
+// ---- project links ----
+
+type attachProjectRequest struct {
+	ProjectID string `json:"project_id"`
+}
+
+type projectSummaryResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+}
+
+func toProjectSummaryResponse(p application.ProjectSummary) projectSummaryResponse {
+	return projectSummaryResponse{ID: p.ID, Name: p.Name, Slug: p.Slug}
+}
+
+func AttachProjectHandler(svc *application.AttachmentService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		var req attachProjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+		if err := svc.AttachProject(r.Context(), r.PathValue("id"), userID, r.PathValue("composeFileID"), req.ProjectID); err != nil {
+			writeFleetError(w, err, "project not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func DetachProjectHandler(svc *application.AttachmentService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		if err := svc.DetachProject(r.Context(), r.PathValue("id"), userID, r.PathValue("composeFileID"), r.PathValue("projectID")); err != nil {
+			writeFleetError(w, err, "")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func ListComposeFileProjectsHandler(svc *application.AttachmentService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		projects, err := svc.ListProjects(r.Context(), r.PathValue("id"), userID, r.PathValue("composeFileID"))
+		if err != nil {
+			writeFleetError(w, err, "")
+			return
+		}
+		responses := make([]projectSummaryResponse, 0, len(projects))
+		for _, p := range projects {
+			responses = append(responses, toProjectSummaryResponse(p))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"data": responses})
 	}
 }
 

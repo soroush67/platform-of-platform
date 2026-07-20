@@ -111,6 +111,61 @@ func (r *ProjectRepository) ProjectExists(ctx context.Context, organizationID, p
 	return exists, tx.Commit(ctx)
 }
 
+// Purge is a genuine hard delete of a Project and everything scoped
+// under it - unlike OrganizationRepository.Purge, most of these tables
+// aren't keyed directly by project_id, so this deletes through
+// subqueries against this project's own workspaces/environments first.
+// Deliberately does NOT touch compose_files themselves (org-scoped,
+// possibly linked to other projects too) - only the compose_file_projects
+// link rows for this project.
+func (r *ProjectRepository) Purge(ctx context.Context, organizationID, projectID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	// Every statement below binds projectID as its only placeholder ($1) -
+	// CockroachDB (unlike some Postgres drivers) fails a query with a
+	// placeholder that's never referenced in its own text ("could not
+	// determine data type of placeholder $1", SQLSTATE 42P18), so
+	// organizationID can't just ride along as an always-passed $1/$2 pair
+	// the way OrganizationRepository.Purge's single-param statements do.
+	// Safe to scope by projectID alone here - app.current_org_id (set
+	// above) already makes every one of these tables' own RLS policy do
+	// the organization-scoping; the final statement re-adds organization_id
+	// explicitly anyway, for the same belt-and-braces reasoning
+	// GetByID's own doc comment gives.
+	statements := []string{
+		`DELETE FROM runs WHERE workspace_id IN (SELECT id FROM workspaces WHERE project_id = $1)`,
+		`DELETE FROM variables WHERE
+			(scope_type = 'project' AND scope_id = $1) OR
+			(scope_type = 'environment' AND scope_id IN (SELECT id FROM environments WHERE project_id = $1)) OR
+			(scope_type = 'workspace' AND scope_id IN (SELECT id FROM workspaces WHERE project_id = $1))`,
+		`DELETE FROM role_bindings WHERE
+			(scope_type = 'project' AND scope_id = $1) OR
+			(scope_type = 'workspace' AND scope_id IN (SELECT id FROM workspaces WHERE project_id = $1))`,
+		`DELETE FROM compose_file_projects WHERE project_id = $1`,
+		`DELETE FROM workspaces WHERE project_id = $1`,
+		`DELETE FROM environments WHERE project_id = $1`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(ctx, stmt, projectID); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM projects WHERE organization_id = $1 AND id = $2`, organizationID, projectID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (r *ProjectRepository) ListByOrganization(ctx context.Context, organizationID string) ([]*domain.Project, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

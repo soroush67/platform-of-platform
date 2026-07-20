@@ -95,7 +95,7 @@ func (s *DeleteVolumeService) Execute(ctx context.Context, organizationID, reque
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeDelete)
 	if err != nil {
 		return err
 	}

@@ -17,6 +17,11 @@ import (
 const (
 	permissionProjectRead   = "project:read"
 	permissionProjectManage = "project:manage"
+	// permissionProjectDelete gates DeleteProjectService specifically -
+	// Owner-only in BuiltinRoles, stricter than project:manage the same
+	// way organization:delete is stricter than organization:manage (see
+	// internal/rbac/domain/role.go's own BuiltinRoles comment).
+	permissionProjectDelete = "project:delete"
 )
 
 // CreateProjectInput implements `POST /api/v1/orgs/{org}/projects`

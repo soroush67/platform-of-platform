@@ -89,6 +89,13 @@ func (f *fakeWorkspaceRepo) ListByProject(ctx context.Context, organizationID, p
 	return out, nil
 }
 
+func (f *fakeWorkspaceRepo) Purge(ctx context.Context, organizationID, workspaceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.workspaces, workspaceID)
+	return nil
+}
+
 func (f *fakeWorkspaceRepo) put(ws *domain.Workspace) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

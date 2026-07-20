@@ -11,13 +11,21 @@ import (
 // Operations' deploy tier) - replaces the earlier shared
 // fleet:read/manage/deploy, which made it impossible to grant "manage
 // Machines" without also granting "manage Operations."
+// The *:delete permissions below are each stricter than their own
+// *:manage sibling (Owner-only in BuiltinRoles) - same narrowing
+// organization:delete already established, extended to every Fleet
+// resource that has a real delete action (see internal/rbac/domain/
+// role.go's own BuiltinRoles comment).
 const (
 	permissionMachineRead         = "machine:read"
 	permissionMachineManage       = "machine:manage"
+	permissionMachineDelete       = "machine:delete"
 	permissionNetworkVolumeRead   = "network_volume:read"
 	permissionNetworkVolumeManage = "network_volume:manage"
+	permissionNetworkVolumeDelete = "network_volume:delete"
 	permissionComposeFileRead     = "compose_file:read"
 	permissionComposeFileManage   = "compose_file:manage"
+	permissionComposeFileDelete   = "compose_file:delete"
 	permissionOperationRead       = "operation:read"
 	permissionOperationDeploy     = "operation:deploy"
 )
@@ -111,7 +119,7 @@ func (s *DeleteNetworkService) Execute(ctx context.Context, organizationID, requ
 	if !isMember {
 		return domain.ErrForbidden
 	}
-	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeManage)
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionNetworkVolumeDelete)
 	if err != nil {
 		return err
 	}

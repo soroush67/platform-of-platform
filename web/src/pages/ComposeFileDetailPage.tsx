@@ -3,13 +3,16 @@ import { Link, useParams } from "react-router-dom";
 
 import {
   useAttachNetwork,
+  useAttachProject,
   useAttachVolume,
   useComposeFile,
   useComposeFileNetworks,
+  useComposeFileProjects,
   useComposeFileVolumes,
   useCreateFleetVariable,
   useDeleteFleetVariable,
   useDetachNetwork,
+  useDetachProject,
   useDetachVolume,
   useFleetNetworks,
   useFleetVariables,
@@ -19,7 +22,8 @@ import {
   useTriggerOperation,
   useUpdateComposeFileContent,
 } from "../api/hooks/useFleet";
-import { OPERATION_TYPES, VAR_TYPES, type VarType } from "../api/types";
+import { useProjects } from "../api/hooks/useTenancy";
+import { DESTRUCTIVE_OPERATION_TYPES, OPERATION_TYPES, VAR_TYPES, type VarType } from "../api/types";
 
 function operationStatusBadgeClass(status: string): string {
   if (status === "success") return "badge-success";
@@ -43,6 +47,11 @@ export function ComposeFileDetailPage() {
   const attachVolume = useAttachVolume(orgId, composeFileId);
   const detachVolume = useDetachVolume(orgId, composeFileId);
 
+  const { data: linkedProjects } = useComposeFileProjects(orgId, composeFileId);
+  const { data: allProjects } = useProjects(orgId);
+  const attachProject = useAttachProject(orgId, composeFileId);
+  const detachProject = useDetachProject(orgId, composeFileId);
+
   const { data: variables } = useFleetVariables(orgId, composeFileId);
   const createVariable = useCreateFleetVariable(orgId, composeFileId);
   const deleteVariable = useDeleteFleetVariable(orgId, composeFileId);
@@ -57,6 +66,7 @@ export function ComposeFileDetailPage() {
     if (composeFile) setContent(composeFile.compose_content);
   }, [composeFile]);
 
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [selectedNetworkId, setSelectedNetworkId] = useState("");
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
   const [containerPath, setContainerPath] = useState("");
@@ -72,6 +82,15 @@ export function ComposeFileDetailPage() {
   const [deployMachineId, setDeployMachineId] = useState("");
   const [operationType, setOperationType] = useState<(typeof OPERATION_TYPES)[number]>("deploy");
   const [triggerError, setTriggerError] = useState<string | null>(null);
+  // confirmingTrigger - a real second step before ever reaching SSH for
+  // a destructive/irreversible operation type (down/kill/remove/stop/
+  // pause), same posture as MembersPage's Remove confirm. Resets on any
+  // change to what's about to run, so a stale confirm can't fire
+  // against a different machine/operation than the one it was shown for.
+  const [confirmingTrigger, setConfirmingTrigger] = useState(false);
+  useEffect(() => {
+    setConfirmingTrigger(false);
+  }, [operationType, deployMachineId]);
 
   async function onSaveContent(e: FormEvent) {
     e.preventDefault();
@@ -104,6 +123,10 @@ export function ComposeFileDetailPage() {
 
   async function onTrigger(e: FormEvent) {
     e.preventDefault();
+    if (DESTRUCTIVE_OPERATION_TYPES.has(operationType) && !confirmingTrigger) {
+      setConfirmingTrigger(true);
+      return;
+    }
     setTriggerError(null);
     try {
       await triggerOperation.mutateAsync({
@@ -111,6 +134,7 @@ export function ComposeFileDetailPage() {
         machine_id: deployMachineId,
         operation_type: operationType,
       });
+      setConfirmingTrigger(false);
     } catch {
       setTriggerError("Failed to trigger operation - the machine may be archived.");
     }
@@ -118,6 +142,7 @@ export function ComposeFileDetailPage() {
 
   const attachedNetworkIds = new Set(networks?.data.map((n) => n.id));
   const attachedVolumeIds = new Set(volumes?.data.map((va) => va.volume.id));
+  const linkedProjectIds = new Set(linkedProjects?.data.map((p) => p.id));
 
   return (
     <div>
@@ -143,6 +168,41 @@ export function ComposeFileDetailPage() {
           </button>{" "}
           {contentSaved && <span className="badge badge-success">saved</span>}
         </form>
+      </div>
+
+      <div className="section-title">Projects</div>
+      <div className="card">
+        {linkedProjects?.data.map((p) => (
+          <div key={p.id} className="field-row" style={{ alignItems: "center", marginBottom: 6 }}>
+            <span className="mono">{p.name}</span>
+            <button className="danger" onClick={() => detachProject.mutate(p.id)} disabled={detachProject.isPending}>
+              Unlink
+            </button>
+          </div>
+        ))}
+        {linkedProjects?.data.length === 0 && <p className="muted">Not linked to any project.</p>}
+        <div className="field-row" style={{ marginTop: 10 }}>
+          <select value={selectedProjectId} onChange={(e) => setSelectedProjectId(e.target.value)}>
+            <option value="">— select project —</option>
+            {allProjects?.data
+              .filter((p) => !linkedProjectIds.has(p.id))
+              .map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+          </select>
+          <button
+            className="secondary"
+            disabled={!selectedProjectId}
+            onClick={() => {
+              attachProject.mutate(selectedProjectId);
+              setSelectedProjectId("");
+            }}
+          >
+            Link
+          </button>
+        </div>
       </div>
 
       <div className="section-title">Networks</div>
@@ -336,9 +396,23 @@ export function ComposeFileDetailPage() {
               ))}
             </select>
           </label>
-          <button type="submit" disabled={triggerOperation.isPending || !deployMachineId}>
-            {triggerOperation.isPending ? "Triggering…" : "Trigger"}
-          </button>
+          {confirmingTrigger ? (
+            <>
+              <p className="muted">
+                &quot;{operationType}&quot; is disruptive and may stop or remove running containers on this machine.
+              </p>
+              <button type="submit" className="danger" disabled={triggerOperation.isPending}>
+                {triggerOperation.isPending ? "Triggering…" : `Confirm ${operationType}`}
+              </button>{" "}
+              <button type="button" className="secondary" onClick={() => setConfirmingTrigger(false)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button type="submit" disabled={triggerOperation.isPending || !deployMachineId}>
+              Trigger
+            </button>
+          )}
         </form>
       </div>
 

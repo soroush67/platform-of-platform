@@ -49,6 +49,10 @@ type ComposeFileRepository interface {
 	GetGlobal(ctx context.Context, organizationID string) (*domain.ComposeFile, bool, error)
 	ListByOrganization(ctx context.Context, organizationID string) ([]*domain.ComposeFile, error)
 	UpdateContent(ctx context.Context, actorUserID, organizationID, id, content string) error
+	// Delete returns domain.ErrComposeFileHasHistory on a real FK
+	// violation (real Operation rows reference it) - no archive fallback,
+	// ComposeFile has no archived concept unlike Machine.
+	Delete(ctx context.Context, actorUserID, organizationID, id string) error
 }
 
 type AttachmentRepository interface {
@@ -58,6 +62,36 @@ type AttachmentRepository interface {
 	AttachVolume(ctx context.Context, actorUserID, organizationID, composeFileID, volumeID, containerPath string) error
 	DetachVolume(ctx context.Context, actorUserID, organizationID, composeFileID, volumeID string) error
 	ListVolumesForComposeFile(ctx context.Context, organizationID, composeFileID string) ([]VolumeAttachmentView, error)
+	AttachProject(ctx context.Context, actorUserID, organizationID, composeFileID, projectID string) error
+	DetachProject(ctx context.Context, actorUserID, organizationID, composeFileID, projectID string) error
+	ListProjectsForComposeFile(ctx context.Context, organizationID, composeFileID string) ([]ProjectSummary, error)
+	// ListComposeFilesForProject is the reverse of ListProjectsForComposeFile -
+	// "which ComposeFiles are linked to this Project," needed by
+	// ProjectDetailPage (Tenancy) which otherwise had no way to show a
+	// link made from the ComposeFile side.
+	ListComposeFilesForProject(ctx context.Context, organizationID, projectID string) ([]*domain.ComposeFile, error)
+}
+
+// ProjectSummary is a minimal read-model for "which Projects is this
+// ComposeFile linked to" - Fleet doesn't own the Project aggregate
+// (Tenancy does) and can't import tenancy/domain across the context
+// boundary, so this carries just the fields the UI needs. Filled by a
+// same-DB SQL join in the postgres adapter (same reasoning
+// ListNetworksForComposeFile's own join into the sibling networks table
+// already uses - no cross-context Go call needed for a plain read).
+type ProjectSummary struct {
+	ID   string
+	Name string
+	Slug string
+}
+
+// ProjectChecker is Fleet's own copy of the identically-shaped port
+// Workspace already declares into Tenancy (internal/workspace/
+// application/ports.go) - "does this project genuinely belong to this
+// org," verified before AttachProject accepts a client-supplied
+// project_id, the same "don't trust what the client typed" reasoning.
+type ProjectChecker interface {
+	ProjectExists(ctx context.Context, organizationID, projectID string) (bool, error)
 }
 
 // VolumeAttachmentView joins a Volume's own catalog fields with its

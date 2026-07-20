@@ -426,6 +426,13 @@ func (f *fakeProjectRepo) ListByOrganization(ctx context.Context, organizationID
 	return out, nil
 }
 
+func (f *fakeProjectRepo) Purge(ctx context.Context, organizationID, projectID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.projects, projectID)
+	return nil
+}
+
 type fakeTeamRepo struct {
 	mu          sync.Mutex
 	teams       map[string]*domain.Team

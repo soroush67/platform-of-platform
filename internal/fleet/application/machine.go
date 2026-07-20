@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"platform-of-platform/internal/fleet/domain"
@@ -208,10 +207,12 @@ func (s *UpdateMachineService) Execute(ctx context.Context, in UpdateMachineInpu
 	return machine, nil
 }
 
-// ArchiveMachineService performs a real hard delete, falling back to a
-// soft archive on domain.ErrMachineHasHistory (a real FK violation
-// against real Operation rows) - exact same delete-or-archive-fallback
-// behavior as the ported Python product's own DELETE /machines/{id}.
+// ArchiveMachineService is a pure, reversible soft-archive - never
+// attempts a hard delete. Gated by machine:manage (the same tier every
+// other reversible Machine action uses) - DeleteMachineService below is
+// the genuinely destructive, Owner-only counterpart, a separate action
+// entirely (operator's own explicit choice: two distinct buttons, not
+// one action that silently decides between them).
 type ArchiveMachineService struct {
 	repo        MachineRepository
 	membership  MembershipChecker
@@ -222,36 +223,59 @@ func NewArchiveMachineService(repo MachineRepository, membership MembershipCheck
 	return &ArchiveMachineService{repo: repo, membership: membership, permChecker: permChecker}
 }
 
-// Execute returns (archived bool, err) - archived=true tells the HTTP
-// handler to report "archived, not deleted" distinctly from a clean
-// hard delete, matching the Python original's own two-outcome response.
-func (s *ArchiveMachineService) Execute(ctx context.Context, organizationID, requestingUserID, machineID string) (archived bool, err error) {
+func (s *ArchiveMachineService) Execute(ctx context.Context, organizationID, requestingUserID, machineID string) error {
 	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if !isMember {
-		return false, domain.ErrForbidden
+		return domain.ErrForbidden
 	}
 	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionMachineManage)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if !allowed {
-		return false, domain.ErrForbidden
+		return domain.ErrForbidden
 	}
 
-	err = s.repo.Delete(ctx, requestingUserID, organizationID, machineID)
-	if err == nil {
-		return false, nil
+	return s.repo.Archive(ctx, requestingUserID, organizationID, machineID)
+}
+
+// DeleteMachineService is the genuinely destructive, Owner-only
+// counterpart to ArchiveMachineService above - a real hard delete only,
+// no silent archive fallback. repo.Delete already maps a real FK
+// violation (the Machine has real Operation history) to
+// domain.ErrMachineHasHistory - that propagates straight to the caller
+// as a real 409 here, letting the operator choose Archive instead
+// themselves rather than the service silently deciding for them.
+type DeleteMachineService struct {
+	repo        MachineRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
+}
+
+func NewDeleteMachineService(repo MachineRepository, membership MembershipChecker, permChecker PermissionChecker) *DeleteMachineService {
+	return &DeleteMachineService{repo: repo, membership: membership, permChecker: permChecker}
+}
+
+func (s *DeleteMachineService) Execute(ctx context.Context, organizationID, requestingUserID, machineID string) error {
+	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
+	if err != nil {
+		return err
 	}
-	if errors.Is(err, domain.ErrMachineHasHistory) {
-		if archiveErr := s.repo.Archive(ctx, requestingUserID, organizationID, machineID); archiveErr != nil {
-			return false, archiveErr
-		}
-		return true, nil
+	if !isMember {
+		return domain.ErrForbidden
 	}
-	return false, err
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionMachineDelete)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return domain.ErrForbidden
+	}
+
+	return s.repo.Delete(ctx, requestingUserID, organizationID, machineID)
 }
 
 // TestMachineConnectionInput/TestMachineConnectionService probe

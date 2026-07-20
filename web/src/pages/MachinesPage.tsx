@@ -5,6 +5,7 @@ import {
   useArchiveMachine,
   useCheckMachineConnection,
   useCreateMachine,
+  useDeleteMachine,
   useMachines,
   useTestMachineConnection,
 } from "../api/hooks/useFleet";
@@ -31,8 +32,28 @@ export function MachinesPage() {
   const createMachine = useCreateMachine(orgId);
   const checkConnection = useCheckMachineConnection(orgId);
   const archiveMachine = useArchiveMachine(orgId);
+  const deleteMachine = useDeleteMachine(orgId);
   const testConnection = useTestMachineConnection(orgId);
   const writeSecret = useWriteSecret(orgId);
+
+  // confirmingDeleteId - two-step confirm for the destructive Delete
+  // action, one row at a time (same pattern as elsewhere in this app).
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function onDelete(machineId: string) {
+    if (confirmingDeleteId !== machineId) {
+      setConfirmingDeleteId(machineId);
+      setDeleteError(null);
+      return;
+    }
+    try {
+      await deleteMachine.mutateAsync(machineId);
+    } catch {
+      setDeleteError("Failed to delete - this machine has operation history and must be archived instead.");
+    }
+    setConfirmingDeleteId(null);
+  }
 
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
@@ -113,6 +134,7 @@ export function MachinesPage() {
         <h1>Machines</h1>
       </div>
 
+      {deleteError && <div className="error-banner">{deleteError}</div>}
       {isLoading && <p className="muted">Loading…</p>}
       {machines && (
         <table>
@@ -151,12 +173,26 @@ export function MachinesPage() {
                         Check connection
                       </button>{" "}
                       <button
-                        className="danger"
+                        className="secondary"
                         onClick={() => archiveMachine.mutate(m.id)}
                         disabled={archiveMachine.isPending}
                       >
-                        Remove
-                      </button>
+                        Archive
+                      </button>{" "}
+                      {confirmingDeleteId === m.id ? (
+                        <>
+                          <button className="danger" onClick={() => onDelete(m.id)} disabled={deleteMachine.isPending}>
+                            {deleteMachine.isPending ? "Deleting…" : "Confirm delete"}
+                          </button>{" "}
+                          <button className="secondary" onClick={() => setConfirmingDeleteId(null)}>
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button className="danger" onClick={() => onDelete(m.id)}>
+                          Delete
+                        </button>
+                      )}
                     </>
                   )}
                   {m.archived && <span className="badge badge-dim">archived</span>}

@@ -161,6 +161,45 @@ func (r *ComposeFileRepository) UpdateContent(ctx context.Context, actorUserID, 
 	return tx.Commit(ctx)
 }
 
+// Delete is a genuine hard delete - compose_file_networks/
+// compose_file_volumes/fleet_variables/compose_file_projects all cascade
+// via their own ON DELETE CASCADE (migrations 0019/0024). operations has
+// neither a cascade nor a DELETE grant (deliberately immutable history) -
+// a real FK violation (23503) there maps to domain.ErrComposeFileHasHistory,
+// same shape as MachineRepository.Delete's own ErrMachineHasHistory
+// mapping, no archive fallback (ComposeFile has no archived concept).
+func (r *ComposeFileRepository) Delete(ctx context.Context, actorUserID, organizationID, id string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	tag, err := tx.Exec(ctx, `DELETE FROM compose_files WHERE organization_id = $1 AND id = $2`, organizationID, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return domain.ErrComposeFileHasHistory
+		}
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrComposeFileNotFound
+	}
+
+	if err := outbox.Write(ctx, tx, organizationID, "FleetComposeFileDeleted", map[string]any{
+		"actor": actorUserID, "target_type": "compose_file", "target_id": id,
+	}); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 const composeFileSelectColumns = `SELECT id, organization_id, name, is_global, compose_content, created_by, created_at`
 
 func scanComposeFile(row rowScanner) (*domain.ComposeFile, error) {

@@ -15,12 +15,14 @@ import (
 // ---- minimal in-memory fakes, scoped to exactly what DeployExecutor needs ----
 
 type fakeMachineRepo struct {
-	mu       sync.Mutex
-	machines map[string]*domain.Machine // id -> machine
+	mu         sync.Mutex
+	machines   map[string]*domain.Machine // id -> machine
+	hasHistory map[string]bool            // id -> Delete should return domain.ErrMachineHasHistory
+	archived   map[string]bool            // id -> Archive was called
 }
 
 func newFakeMachineRepo() *fakeMachineRepo {
-	return &fakeMachineRepo{machines: map[string]*domain.Machine{}}
+	return &fakeMachineRepo{machines: map[string]*domain.Machine{}, hasHistory: map[string]bool{}, archived: map[string]bool{}}
 }
 
 func (f *fakeMachineRepo) Create(ctx context.Context, actorUserID string, m *domain.Machine) error {
@@ -48,19 +50,29 @@ func (f *fakeMachineRepo) Update(ctx context.Context, actorUserID string, m *dom
 	return nil
 }
 func (f *fakeMachineRepo) Delete(ctx context.Context, actorUserID, organizationID, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hasHistory[id] {
+		return domain.ErrMachineHasHistory
+	}
+	delete(f.machines, id)
 	return nil
 }
 func (f *fakeMachineRepo) Archive(ctx context.Context, actorUserID, organizationID, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.archived[id] = true
 	return nil
 }
 
 type fakeComposeFileRepo struct {
-	mu    sync.Mutex
-	files map[string]*domain.ComposeFile
+	mu         sync.Mutex
+	files      map[string]*domain.ComposeFile
+	hasHistory map[string]bool // id -> Delete should return domain.ErrComposeFileHasHistory
 }
 
 func newFakeComposeFileRepo() *fakeComposeFileRepo {
-	return &fakeComposeFileRepo{files: map[string]*domain.ComposeFile{}}
+	return &fakeComposeFileRepo{files: map[string]*domain.ComposeFile{}, hasHistory: map[string]bool{}}
 }
 func (f *fakeComposeFileRepo) Create(ctx context.Context, c *domain.ComposeFile) error {
 	f.mu.Lock()
@@ -94,6 +106,15 @@ func (f *fakeComposeFileRepo) UpdateContent(ctx context.Context, actorUserID, or
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.files[id].ComposeContent = content
+	return nil
+}
+func (f *fakeComposeFileRepo) Delete(ctx context.Context, actorUserID, organizationID, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hasHistory[id] {
+		return domain.ErrComposeFileHasHistory
+	}
+	delete(f.files, id)
 	return nil
 }
 
@@ -144,6 +165,18 @@ func (f *fakeAttachmentRepo) DetachVolume(ctx context.Context, actorUserID, orga
 	return nil
 }
 func (f *fakeAttachmentRepo) ListVolumesForComposeFile(ctx context.Context, organizationID, composeFileID string) ([]application.VolumeAttachmentView, error) {
+	return nil, nil
+}
+func (f *fakeAttachmentRepo) AttachProject(ctx context.Context, actorUserID, organizationID, composeFileID, projectID string) error {
+	return nil
+}
+func (f *fakeAttachmentRepo) DetachProject(ctx context.Context, actorUserID, organizationID, composeFileID, projectID string) error {
+	return nil
+}
+func (f *fakeAttachmentRepo) ListProjectsForComposeFile(ctx context.Context, organizationID, composeFileID string) ([]application.ProjectSummary, error) {
+	return nil, nil
+}
+func (f *fakeAttachmentRepo) ListComposeFilesForProject(ctx context.Context, organizationID, projectID string) ([]*domain.ComposeFile, error) {
 	return nil, nil
 }
 

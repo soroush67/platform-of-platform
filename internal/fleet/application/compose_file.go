@@ -142,3 +142,37 @@ func (s *UpdateComposeFileContentService) Execute(ctx context.Context, organizat
 
 	return s.repo.UpdateContent(ctx, requestingUserID, organizationID, composeFileID, content)
 }
+
+// DeleteComposeFileService - gated by compose_file:delete (Owner-only,
+// stricter than compose_file:manage - same narrowing every other new
+// *:delete permission uses). A genuine hard delete; repo.Delete returns
+// domain.ErrComposeFileHasHistory on real Operation history, propagated
+// straight through - no archive fallback exists for ComposeFile.
+type DeleteComposeFileService struct {
+	repo        ComposeFileRepository
+	membership  MembershipChecker
+	permChecker PermissionChecker
+}
+
+func NewDeleteComposeFileService(repo ComposeFileRepository, membership MembershipChecker, permChecker PermissionChecker) *DeleteComposeFileService {
+	return &DeleteComposeFileService{repo: repo, membership: membership, permChecker: permChecker}
+}
+
+func (s *DeleteComposeFileService) Execute(ctx context.Context, organizationID, requestingUserID, composeFileID string) error {
+	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileDelete)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return domain.ErrForbidden
+	}
+
+	return s.repo.Delete(ctx, requestingUserID, organizationID, composeFileID)
+}

@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { useTriggerRun, useRuns } from "../api/hooks/useExecution";
-import { useWorkspace } from "../api/hooks/useWorkspace";
+import { useDeleteWorkspace, useWorkspace } from "../api/hooks/useWorkspace";
 import type { RunStatus } from "../api/types";
 
 function statusBadgeClass(status: RunStatus): string {
@@ -14,11 +14,17 @@ function statusBadgeClass(status: RunStatus): string {
 
 export function WorkspaceDetailPage() {
   const { orgId = "", projectId = "", workspaceId = "" } = useParams();
+  const navigate = useNavigate();
   const { data: workspace } = useWorkspace(orgId, projectId, workspaceId);
   const { data: runs, isLoading } = useRuns(orgId, projectId, workspaceId);
   const triggerRun = useTriggerRun(orgId, projectId, workspaceId);
+  const deleteWorkspace = useDeleteWorkspace(orgId, projectId);
 
   const [error, setError] = useState<string | null>(null);
+  // confirmingDelete - same two-step confirm pattern used for every
+  // other destructive action in this app (ComposeFileDetailPage's
+  // operation trigger, ProjectListPage's bulk delete).
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   async function onTrigger() {
     setError(null);
@@ -30,13 +36,37 @@ export function WorkspaceDetailPage() {
     }
   }
 
+  async function onDelete() {
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      return;
+    }
+    await deleteWorkspace.mutateAsync(workspaceId);
+    navigate(`/orgs/${orgId}/projects/${projectId}`);
+  }
+
   return (
     <div>
       <div className="page-header">
         <h1>{workspace?.name ?? "Workspace"}</h1>
         <button onClick={onTrigger} disabled={triggerRun.isPending || workspace?.locked}>
           {triggerRun.isPending ? "Triggering…" : "▶ Trigger run"}
-        </button>
+        </button>{" "}
+        {confirmingDelete ? (
+          <>
+            <span className="muted">Permanently delete this workspace and its run history?</span>{" "}
+            <button className="danger" onClick={onDelete} disabled={deleteWorkspace.isPending}>
+              {deleteWorkspace.isPending ? "Deleting…" : "Confirm delete"}
+            </button>{" "}
+            <button className="secondary" onClick={() => setConfirmingDelete(false)}>
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button className="danger" onClick={onDelete}>
+            Delete
+          </button>
+        )}
       </div>
       {workspace?.locked && <div className="error-banner">This workspace is locked - a run is already in progress.</div>}
       {error && <div className="error-banner">{error}</div>}

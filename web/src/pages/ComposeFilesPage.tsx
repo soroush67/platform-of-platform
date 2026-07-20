@@ -1,17 +1,36 @@
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { useComposeFiles, useCreateComposeFile } from "../api/hooks/useFleet";
+import { useComposeFiles, useCreateComposeFile, useDeleteComposeFile } from "../api/hooks/useFleet";
 
 export function ComposeFilesPage() {
   const { orgId = "" } = useParams();
   const { data: composeFiles, isLoading } = useComposeFiles(orgId);
   const createComposeFile = useCreateComposeFile(orgId);
+  const deleteComposeFile = useDeleteComposeFile(orgId);
 
   const [name, setName] = useState("");
   const [isGlobal, setIsGlobal] = useState(false);
   const [content, setContent] = useState("services:\n  app:\n    image: nginx:latest\n");
   const [formError, setFormError] = useState<string | null>(null);
+  // confirmingDeleteId - two-step confirm, one row at a time (same
+  // pattern as MachinesPage's Delete button).
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function onDelete(composeFileId: string) {
+    if (confirmingDeleteId !== composeFileId) {
+      setConfirmingDeleteId(composeFileId);
+      setDeleteError(null);
+      return;
+    }
+    try {
+      await deleteComposeFile.mutateAsync(composeFileId);
+    } catch {
+      setDeleteError("Failed to delete - this compose file has deploy (Operation) history and can't be deleted.");
+    }
+    setConfirmingDeleteId(null);
+  }
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -31,6 +50,7 @@ export function ComposeFilesPage() {
         <h1>Compose files</h1>
       </div>
 
+      {deleteError && <div className="error-banner">{deleteError}</div>}
       {isLoading && <p className="muted">Loading…</p>}
       {composeFiles && (
         <table>
@@ -39,6 +59,7 @@ export function ComposeFilesPage() {
               <th>Name</th>
               <th>Global</th>
               <th>Created</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -49,11 +70,27 @@ export function ComposeFilesPage() {
                 </td>
                 <td>{c.is_global && <span className="badge">global</span>}</td>
                 <td className="muted">{new Date(c.created_at).toLocaleString()}</td>
+                <td>
+                  {confirmingDeleteId === c.id ? (
+                    <>
+                      <button className="danger" onClick={() => onDelete(c.id)} disabled={deleteComposeFile.isPending}>
+                        {deleteComposeFile.isPending ? "Deleting…" : "Confirm delete"}
+                      </button>{" "}
+                      <button className="secondary" onClick={() => setConfirmingDeleteId(null)}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button className="danger" onClick={() => onDelete(c.id)}>
+                      Delete
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
             {composeFiles.data.length === 0 && (
               <tr>
-                <td colSpan={3} className="muted">
+                <td colSpan={4} className="muted">
                   No compose files yet.
                 </td>
               </tr>

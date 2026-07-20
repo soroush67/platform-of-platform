@@ -5,6 +5,7 @@ import { apiFetch, apiFetchRaw } from "../client";
 import {
   isTerminalOperationStatus,
   type ComposeFile,
+  type ComposeFileProjectLink,
   type CredentialType,
   type FleetNetwork,
   type FleetVariable,
@@ -75,15 +76,24 @@ export function useUpdateMachine(orgId: string) {
   });
 }
 
-// useArchiveMachine hits DELETE, which is really "delete-or-archive" -
-// ArchiveMachineHandler's own {archived: bool} response tells the caller
-// which outcome actually happened (a Machine with real Operation history
-// can never be hard-deleted, matching the ported Python original).
+// useArchiveMachine - a pure, reversible soft-archive, never attempts a
+// hard delete (that's useDeleteMachine below, a separate action).
 export function useArchiveMachine(orgId: string) {
   const qc = useQueryClient();
   return useMutation({
+    mutationFn: (machineId: string) => apiFetch<void>(`/orgs/${orgId}/machines/${machineId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "machines"] }),
+  });
+}
+
+// useDeleteMachine - a genuine hard delete, no archive fallback. Real
+// 409 if the Machine has Operation history (surfaced by the caller, not
+// silently turned into an archive).
+export function useDeleteMachine(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
     mutationFn: (machineId: string) =>
-      apiFetch<{ archived: boolean }>(`/orgs/${orgId}/machines/${machineId}`, { method: "DELETE" }),
+      apiFetch<void>(`/orgs/${orgId}/machines/${machineId}/hard-delete`, { method: "POST" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "machines"] }),
   });
 }
@@ -201,6 +211,18 @@ export function useCreateComposeFile(orgId: string) {
   });
 }
 
+// useDeleteComposeFile - a genuine hard delete. Real 409 if the compose
+// file has Operation (deploy) history - no archive fallback exists for
+// ComposeFile, unlike Machine.
+export function useDeleteComposeFile(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (composeFileId: string) =>
+      apiFetch<void>(`/orgs/${orgId}/compose-files/${composeFileId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "compose-files"] }),
+  });
+}
+
 export function useUpdateComposeFileContent(orgId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -275,6 +297,53 @@ export function useDetachVolume(orgId: string, composeFileId: string) {
     mutationFn: (volumeId: string) =>
       apiFetch<void>(`/orgs/${orgId}/compose-files/${composeFileId}/volumes/${volumeId}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "compose-files", composeFileId, "volumes"] }),
+  });
+}
+
+// useProjectComposeFiles backs ProjectDetailPage's own "Compose files"
+// section - the reverse view of useComposeFileProjects below (same
+// compose_file_projects junction table, opposite end).
+export function useProjectComposeFiles(orgId: string, projectId: string) {
+  return useQuery({
+    queryKey: ["orgs", orgId, "projects", projectId, "compose-files"],
+    queryFn: () => apiFetch<ListResponse<ComposeFile>>(`/orgs/${orgId}/projects/${projectId}/compose-files`),
+    enabled: !!orgId && !!projectId,
+  });
+}
+
+export function useComposeFileProjects(orgId: string, composeFileId: string) {
+  return useQuery({
+    queryKey: ["orgs", orgId, "compose-files", composeFileId, "projects"],
+    queryFn: () =>
+      apiFetch<ListResponse<ComposeFileProjectLink>>(`/orgs/${orgId}/compose-files/${composeFileId}/projects`),
+    enabled: !!orgId && !!composeFileId,
+  });
+}
+
+export function useAttachProject(orgId: string, composeFileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) =>
+      apiFetch<void>(`/orgs/${orgId}/compose-files/${composeFileId}/projects`, {
+        method: "POST",
+        body: JSON.stringify({ project_id: projectId }),
+      }),
+    onSuccess: (_data, projectId) => {
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "compose-files", composeFileId, "projects"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "projects", projectId, "compose-files"] });
+    },
+  });
+}
+
+export function useDetachProject(orgId: string, composeFileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) =>
+      apiFetch<void>(`/orgs/${orgId}/compose-files/${composeFileId}/projects/${projectId}`, { method: "DELETE" }),
+    onSuccess: (_data, projectId) => {
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "compose-files", composeFileId, "projects"] });
+      qc.invalidateQueries({ queryKey: ["orgs", orgId, "projects", projectId, "compose-files"] });
+    },
   });
 }
 

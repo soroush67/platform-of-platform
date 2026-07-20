@@ -260,6 +260,43 @@ func (r *WorkspaceRepository) Unlock(ctx context.Context, organizationID, worksp
 	return tx.Commit(ctx)
 }
 
+// Purge is a genuine hard delete of a Workspace and everything scoped
+// under it (runs, workspace-scoped variables, workspace-scoped role
+// bindings) - same shape as Tenancy's own ProjectRepository.Purge, one
+// level down. Every statement binds workspaceID alone as $1 - the
+// CockroachDB "unused placeholder" bug hit and fixed in Project's own
+// Purge (an unreferenced $N makes the whole statement fail with
+// SQLSTATE 42P18) applies here too, so organization_id only appears on
+// the final statement, which is the only one that actually needs it.
+func (r *WorkspaceRepository) Purge(ctx context.Context, organizationID, workspaceID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.current_org_id', $1, true)`, organizationID); err != nil {
+		return err
+	}
+
+	statements := []string{
+		`DELETE FROM runs WHERE workspace_id = $1`,
+		`DELETE FROM variables WHERE scope_type = 'workspace' AND scope_id = $1`,
+		`DELETE FROM role_bindings WHERE scope_type = 'workspace' AND scope_id = $1`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.Exec(ctx, stmt, workspaceID); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM workspaces WHERE organization_id = $1 AND id = $2`, organizationID, workspaceID); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (r *WorkspaceRepository) ListByProject(ctx context.Context, organizationID, projectID string) ([]*domain.Workspace, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

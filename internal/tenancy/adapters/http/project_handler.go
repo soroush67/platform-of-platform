@@ -164,3 +164,35 @@ func GetProjectHandler(svc *application.GetProjectService) http.HandlerFunc {
 		json.NewEncoder(w).Encode(toProjectResponse(project))
 	}
 }
+
+// DeleteProjectHandler implements DELETE /api/v1/orgs/{id}/projects/{projectID} -
+// a genuine hard delete, gated by project:manage. No response body (204).
+func DeleteProjectHandler(svc *application.DeleteProjectService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.DeleteProjectInput{
+			OrganizationID:   r.PathValue("id"),
+			ProjectID:        r.PathValue("projectID"),
+			RequestingUserID: userID,
+		})
+		if err != nil {
+			if errors.Is(err, domain.ErrOrganizationNotFound) || errors.Is(err, domain.ErrProjectNotFound) {
+				httpserver.WriteProblem(w, http.StatusNotFound, "project not found", "")
+				return
+			}
+			if errors.Is(err, domain.ErrForbidden) {
+				httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "requires project:manage")
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to delete project", "")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}

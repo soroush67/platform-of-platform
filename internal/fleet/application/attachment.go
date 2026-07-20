@@ -13,13 +13,14 @@ import (
 // are pure junction rows, no domain constructor/invariant of their own
 // beyond what the repository's own FK/unique constraints enforce).
 type AttachmentService struct {
-	repo        AttachmentRepository
-	membership  MembershipChecker
-	permChecker PermissionChecker
+	repo           AttachmentRepository
+	membership     MembershipChecker
+	permChecker    PermissionChecker
+	projectChecker ProjectChecker
 }
 
-func NewAttachmentService(repo AttachmentRepository, membership MembershipChecker, permChecker PermissionChecker) *AttachmentService {
-	return &AttachmentService{repo: repo, membership: membership, permChecker: permChecker}
+func NewAttachmentService(repo AttachmentRepository, membership MembershipChecker, permChecker PermissionChecker, projectChecker ProjectChecker) *AttachmentService {
+	return &AttachmentService{repo: repo, membership: membership, permChecker: permChecker, projectChecker: projectChecker}
 }
 
 func (s *AttachmentService) checkManage(ctx context.Context, organizationID, requestingUserID string) error {
@@ -105,4 +106,47 @@ func (s *AttachmentService) ListVolumes(ctx context.Context, organizationID, req
 		return nil, err
 	}
 	return s.repo.ListVolumesForComposeFile(ctx, organizationID, composeFileID)
+}
+
+// AttachProject/DetachProject/ListProjects - "admin or users with the
+// right permission" (the operator's own ask) is exactly checkManage's
+// compose_file:manage gate, already excluded from the Read-only builtin
+// role - same posture as Attach/DetachNetwork above.
+func (s *AttachmentService) AttachProject(ctx context.Context, organizationID, requestingUserID, composeFileID, projectID string) error {
+	if err := s.checkManage(ctx, organizationID, requestingUserID); err != nil {
+		return err
+	}
+	exists, err := s.projectChecker.ProjectExists(ctx, organizationID, projectID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return domain.ErrProjectNotFound
+	}
+	return s.repo.AttachProject(ctx, requestingUserID, organizationID, composeFileID, projectID)
+}
+
+func (s *AttachmentService) DetachProject(ctx context.Context, organizationID, requestingUserID, composeFileID, projectID string) error {
+	if err := s.checkManage(ctx, organizationID, requestingUserID); err != nil {
+		return err
+	}
+	return s.repo.DetachProject(ctx, requestingUserID, organizationID, composeFileID, projectID)
+}
+
+func (s *AttachmentService) ListProjects(ctx context.Context, organizationID, requestingUserID, composeFileID string) ([]ProjectSummary, error) {
+	if err := s.checkRead(ctx, organizationID, requestingUserID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListProjectsForComposeFile(ctx, organizationID, composeFileID)
+}
+
+// ListComposeFilesForProject backs ProjectDetailPage's own "which
+// ComposeFiles are linked here" view - same compose_file:read gate as
+// ListProjects (both are read-only views of the same junction table,
+// just from opposite ends).
+func (s *AttachmentService) ListComposeFilesForProject(ctx context.Context, organizationID, requestingUserID, projectID string) ([]*domain.ComposeFile, error) {
+	if err := s.checkRead(ctx, organizationID, requestingUserID); err != nil {
+		return nil, err
+	}
+	return s.repo.ListComposeFilesForProject(ctx, organizationID, projectID)
 }

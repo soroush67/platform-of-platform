@@ -32,7 +32,8 @@ const (
 	// is a materially different, higher-consequence action than the
 	// resource-management one, even though both currently sit at the
 	// same Write-role tier.
-	PermissionWorkspaceApply Permission = "workspace:apply"
+	PermissionWorkspaceApply  Permission = "workspace:apply"
+	PermissionWorkspaceDelete Permission = "workspace:delete"
 	// PermissionOrganizationDelete is Owner-only (see BuiltinRoles below) -
 	// the first real capability that distinguishes Owner from Admin.
 	// Gates archiving an Organization (ArchiveOrganizationService),
@@ -49,6 +50,14 @@ const (
 	// one-permission-per-menu split Fleet's own permissions below use.
 	PermissionProjectRead   Permission = "project:read"
 	PermissionProjectManage Permission = "project:manage"
+	// PermissionProjectDelete/WorkspaceDelete/MachineDelete/
+	// NetworkVolumeDelete/ComposeFileDelete each extend the same
+	// stricter-than-manage narrowing organization:delete already
+	// established to every other resource that now has a real delete
+	// action - Owner-only (see BuiltinRoles below), so Admin's existing
+	// full *:manage parity with Owner stops short of destructive-delete
+	// the same way it already stops short of organization:delete.
+	PermissionProjectDelete Permission = "project:delete"
 	// PermissionMachineRead/Manage, PermissionNetworkVolumeRead/Manage,
 	// PermissionComposeFileRead/Manage, PermissionOperationRead/Deploy
 	// each gate exactly one Fleet (internal/fleet - the ported
@@ -63,12 +72,14 @@ const (
 	// action than managing the catalog resources themselves.
 	PermissionMachineRead   Permission = "machine:read"
 	PermissionMachineManage Permission = "machine:manage"
+	PermissionMachineDelete Permission = "machine:delete"
 	// PermissionNetworkVolumeRead/Manage gates BOTH the Network and
 	// Volume catalogs as one pair - "Networks & volumes" is a single
 	// combined nav menu/page, not two, so it gets one permission pair
 	// like every other menu does.
 	PermissionNetworkVolumeRead   Permission = "network_volume:read"
 	PermissionNetworkVolumeManage Permission = "network_volume:manage"
+	PermissionNetworkVolumeDelete Permission = "network_volume:delete"
 	// PermissionComposeFileRead/Manage also gates fleet_variables CRUD
 	// and attaching/detaching a Network or Volume TO a ComposeFile
 	// (AttachmentService, variable.go) - both of those are only ever
@@ -76,6 +87,7 @@ const (
 	// Compose files menu.
 	PermissionComposeFileRead   Permission = "compose_file:read"
 	PermissionComposeFileManage Permission = "compose_file:manage"
+	PermissionComposeFileDelete Permission = "compose_file:delete"
 	// PermissionOperationRead/Deploy - Operations has no separate
 	// "manage" tier: the only mutating action on this menu is triggering
 	// a real SSH deploy, so Deploy is its one write-tier permission.
@@ -95,15 +107,20 @@ var AllPermissions = map[Permission]bool{
 	PermissionOrganizationDelete:  true,
 	PermissionProjectRead:         true,
 	PermissionProjectManage:       true,
+	PermissionProjectDelete:       true,
 	PermissionWorkspaceRead:       true,
 	PermissionWorkspaceManage:     true,
 	PermissionWorkspaceApply:      true,
+	PermissionWorkspaceDelete:     true,
 	PermissionMachineRead:         true,
 	PermissionMachineManage:       true,
+	PermissionMachineDelete:       true,
 	PermissionNetworkVolumeRead:   true,
 	PermissionNetworkVolumeManage: true,
+	PermissionNetworkVolumeDelete: true,
 	PermissionComposeFileRead:     true,
 	PermissionComposeFileManage:   true,
+	PermissionComposeFileDelete:   true,
 	PermissionOperationRead:       true,
 	PermissionOperationDeploy:     true,
 }
@@ -124,10 +141,16 @@ const (
 //
 // Owner and Admin now genuinely diverge: only Owner gets
 // organization:delete (archiving the Organization -
-// ArchiveOrganizationService). Ownership transfer and billing are still
-// not modeled at all (no feature exists to gate on billing yet) - this
-// is the one real, buildable differentiator the architecture docs
-// themselves named, not a full "everything TFC's Owner role can do."
+// ArchiveOrganizationService) and, extending that same narrowing to
+// every resource that now has a real delete action, project:delete/
+// workspace:delete/machine:delete/network_volume:delete/
+// compose_file:delete - Admin keeps full parity with Owner on every
+// *:manage permission (create/configure/update), but destructive delete
+// stays Owner-only across the board, not just for Organizations.
+// Ownership transfer and billing are still not modeled at all (no
+// feature exists to gate on billing yet) - this is the one real,
+// buildable differentiator the architecture docs themselves named, not
+// a full "everything TFC's Owner role can do."
 // Write/Read diverge the same way they always have: creating/managing a
 // Workspace (workspace:manage) is a day-to-day action a Write-roled
 // member gets and a Read-roled one doesn't. project:manage is
@@ -140,11 +163,11 @@ const (
 var BuiltinRoles = map[string][]Permission{
 	RoleOwner: {
 		PermissionOrganizationRead, PermissionOrganizationManage, PermissionOrganizationDelete,
-		PermissionProjectRead, PermissionProjectManage,
-		PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply,
-		PermissionMachineRead, PermissionMachineManage,
-		PermissionNetworkVolumeRead, PermissionNetworkVolumeManage,
-		PermissionComposeFileRead, PermissionComposeFileManage,
+		PermissionProjectRead, PermissionProjectManage, PermissionProjectDelete,
+		PermissionWorkspaceRead, PermissionWorkspaceManage, PermissionWorkspaceApply, PermissionWorkspaceDelete,
+		PermissionMachineRead, PermissionMachineManage, PermissionMachineDelete,
+		PermissionNetworkVolumeRead, PermissionNetworkVolumeManage, PermissionNetworkVolumeDelete,
+		PermissionComposeFileRead, PermissionComposeFileManage, PermissionComposeFileDelete,
 		PermissionOperationRead, PermissionOperationDeploy,
 	},
 	RoleAdmin: {

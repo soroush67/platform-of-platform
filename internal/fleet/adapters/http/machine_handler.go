@@ -166,14 +166,33 @@ func ArchiveMachineHandler(svc *application.ArchiveMachineService) http.HandlerF
 			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
 			return
 		}
-		archived, err := svc.Execute(r.Context(), r.PathValue("id"), userID, r.PathValue("machineID"))
-		if err != nil {
+		if err := svc.Execute(r.Context(), r.PathValue("id"), userID, r.PathValue("machineID")); err != nil {
 			writeFleetError(w, err, "machine not found")
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{"archived": archived})
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// DeleteMachineHandler implements `POST /api/v1/orgs/{id}/machines/
+// {machineID}/hard-delete` - same `/hard-delete` suffix convention
+// Organization's own genuine hard delete already uses (as opposed to
+// the archive-shaped `DELETE /machines/{machineID}` above), gated by
+// machine:delete. A real 409 (via writeFleetError's ErrMachineHasHistory
+// mapping) if the Machine has real Operation history - no silent
+// archive fallback.
+func DeleteMachineHandler(svc *application.DeleteMachineService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		if err := svc.Execute(r.Context(), r.PathValue("id"), userID, r.PathValue("machineID")); err != nil {
+			writeFleetError(w, err, "machine not found")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 

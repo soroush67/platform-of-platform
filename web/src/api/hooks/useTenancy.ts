@@ -159,6 +159,18 @@ export function useCreateProject(orgId: string) {
   });
 }
 
+// useDeleteProject - a genuine hard delete (Project + everything scoped
+// under it: Workspaces, Environments, Runs, Variables, RoleBindings,
+// compose-file links). No response body (204).
+export function useDeleteProject(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (projectId: string) =>
+      apiFetch<void>(`/orgs/${orgId}/projects/${projectId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "projects"] }),
+  });
+}
+
 export function useTeams(orgId: string) {
   return useQuery({
     queryKey: ["orgs", orgId, "teams"],

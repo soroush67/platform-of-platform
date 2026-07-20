@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 
+import { useProjectComposeFiles } from "../api/hooks/useFleet";
 import { useProject } from "../api/hooks/useTenancy";
 import { useCreateEnvironment, useCreateWorkspace, useEnvironments, useWorkspaces } from "../api/hooks/useWorkspace";
 import { EXECUTION_ENGINES } from "../api/types";
@@ -10,6 +11,7 @@ export function ProjectDetailPage() {
   const { data: project } = useProject(orgId, projectId);
   const { data: environments } = useEnvironments(orgId, projectId);
   const { data: workspaces } = useWorkspaces(orgId, projectId);
+  const { data: composeFiles } = useProjectComposeFiles(orgId, projectId);
   const createEnv = useCreateEnvironment(orgId, projectId);
   const createWs = useCreateWorkspace(orgId, projectId);
 
@@ -40,6 +42,33 @@ export function ProjectDetailPage() {
       <div className="page-header">
         <h1>{project?.name ?? "Project"}</h1>
       </div>
+
+      <div className="section-title">Compose files</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Global</th>
+          </tr>
+        </thead>
+        <tbody>
+          {composeFiles?.data.map((c) => (
+            <tr key={c.id}>
+              <td>
+                <Link to={`/orgs/${orgId}/compose-files/${c.id}`}>{c.name}</Link>
+              </td>
+              <td>{c.is_global && <span className="badge">global</span>}</td>
+            </tr>
+          ))}
+          {composeFiles?.data.length === 0 && (
+            <tr>
+              <td colSpan={2} className="muted">
+                No compose files linked to this project yet - link one from its own detail page.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
 
       <div className="section-title">Environments</div>
       <table>

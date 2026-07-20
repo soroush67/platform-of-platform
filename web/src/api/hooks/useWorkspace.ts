@@ -60,3 +60,15 @@ export function useCreateWorkspace(orgId: string, projectId: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "projects", projectId, "workspaces"] }),
   });
 }
+
+// useDeleteWorkspace - a genuine hard delete (Workspace + its own Runs/
+// Variables/RoleBindings). No guard on locked/active-Run state - the
+// backend allows it unconditionally, per an explicit operator choice.
+export function useDeleteWorkspace(orgId: string, projectId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (workspaceId: string) =>
+      apiFetch<void>(`/orgs/${orgId}/projects/${projectId}/workspaces/${workspaceId}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "projects", projectId, "workspaces"] }),
+  });
+}

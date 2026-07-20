@@ -20,3 +20,15 @@ type VolumeAttachment struct {
 	VolumeID      string
 	ContainerPath string
 }
+
+// ProjectAttachment is the junction row behind migrations/
+// 0024_compose_file_projects.up.sql's compose_file_projects table - a
+// ComposeFile can be linked to more than one Project at once, unlike
+// Network/Volume attachment which are also many-to-many but conceptually
+// per-ComposeFile-config; this one is purely "which Projects can see/use
+// this ComposeFile."
+type ProjectAttachment struct {
+	ID            string
+	ComposeFileID string
+	ProjectID     string
+}

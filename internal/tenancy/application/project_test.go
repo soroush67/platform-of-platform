@@ -79,6 +79,69 @@ func TestCreateProjectService_NonMemberGetsOrgNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteProjectService_RequiresProjectDelete(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "member-1")
+	projectRepo := newFakeProjectRepo()
+	project, _ := domain.NewProject(org.ID, "p", "p", "")
+	_ = projectRepo.Create(context.Background(), project)
+
+	permChecker := newFakePermChecker()
+	svc := application.NewDeleteProjectService(projectRepo, projectRepo, membershipRepo, permChecker)
+
+	err := svc.Execute(context.Background(), application.DeleteProjectInput{
+		OrganizationID: org.ID, ProjectID: project.ID, RequestingUserID: "member-1",
+	})
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden without project:delete, got: %v", err)
+	}
+
+	permChecker.grant(org.ID, "member-1", "project:delete")
+	if err := svc.Execute(context.Background(), application.DeleteProjectInput{
+		OrganizationID: org.ID, ProjectID: project.ID, RequestingUserID: "member-1",
+	}); err != nil {
+		t.Fatalf("expected deletion to succeed once granted, got: %v", err)
+	}
+	if _, err := projectRepo.GetByID(context.Background(), org.ID, project.ID); !errors.Is(err, domain.ErrProjectNotFound) {
+		t.Fatalf("expected project to be gone after Purge, got: %v", err)
+	}
+}
+
+func TestDeleteProjectService_NonMemberGetsOrgNotFound(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "real-member")
+	projectRepo := newFakeProjectRepo()
+	project, _ := domain.NewProject(org.ID, "p", "p", "")
+	_ = projectRepo.Create(context.Background(), project)
+	svc := application.NewDeleteProjectService(projectRepo, projectRepo, membershipRepo, newFakePermChecker())
+
+	err := svc.Execute(context.Background(), application.DeleteProjectInput{
+		OrganizationID: org.ID, ProjectID: project.ID, RequestingUserID: "stranger",
+	})
+	if !errors.Is(err, domain.ErrOrganizationNotFound) {
+		t.Fatalf("expected ErrOrganizationNotFound for a non-member (not ErrForbidden - don't reveal existence), got: %v", err)
+	}
+}
+
+func TestDeleteProjectService_UnknownProjectNotFound(t *testing.T) {
+	orgRepo := newFakeOrgRepo()
+	membershipRepo := newFakeMembershipRepo()
+	org := setupOrgWithMember(t, orgRepo, membershipRepo, "admin")
+	projectRepo := newFakeProjectRepo()
+	permChecker := newFakePermChecker()
+	permChecker.grant(org.ID, "admin", "project:delete")
+	svc := application.NewDeleteProjectService(projectRepo, projectRepo, membershipRepo, permChecker)
+
+	err := svc.Execute(context.Background(), application.DeleteProjectInput{
+		OrganizationID: org.ID, ProjectID: "nonexistent", RequestingUserID: "admin",
+	})
+	if !errors.Is(err, domain.ErrProjectNotFound) {
+		t.Fatalf("expected ErrProjectNotFound, got: %v", err)
+	}
+}
+
 func TestGetProjectService_OwnerAdminBypassesVisibility(t *testing.T) {
 	orgRepo := newFakeOrgRepo()
 	membershipRepo := newFakeMembershipRepo()

@@ -19,7 +19,8 @@ func writeFleetError(w http.ResponseWriter, err error, notFoundTitle string) {
 		httpserver.WriteProblem(w, http.StatusForbidden, "forbidden", "")
 	case errors.Is(err, domain.ErrMachineNotFound), errors.Is(err, domain.ErrNetworkNotFound),
 		errors.Is(err, domain.ErrVolumeNotFound), errors.Is(err, domain.ErrComposeFileNotFound),
-		errors.Is(err, domain.ErrVariableNotFound), errors.Is(err, domain.ErrOperationNotFound):
+		errors.Is(err, domain.ErrVariableNotFound), errors.Is(err, domain.ErrOperationNotFound),
+		errors.Is(err, domain.ErrProjectNotFound):
 		httpserver.WriteProblem(w, http.StatusNotFound, notFoundTitle, "")
 	case errors.Is(err, domain.ErrNetworkInUse):
 		httpserver.WriteProblem(w, http.StatusConflict, "network is still attached to a compose file", "")
@@ -27,6 +28,10 @@ func writeFleetError(w http.ResponseWriter, err error, notFoundTitle string) {
 		httpserver.WriteProblem(w, http.StatusConflict, "volume is still attached to a compose file", "")
 	case errors.Is(err, domain.ErrGlobalComposeFileExists):
 		httpserver.WriteProblem(w, http.StatusConflict, "this organization already has a global compose file", "")
+	case errors.Is(err, domain.ErrMachineHasHistory):
+		httpserver.WriteProblem(w, http.StatusConflict, "machine has operation history and cannot be hard-deleted", "")
+	case errors.Is(err, domain.ErrComposeFileHasHistory):
+		httpserver.WriteProblem(w, http.StatusConflict, "compose file has operation history and cannot be deleted", "")
 	default:
 		var validationErr *domain.ValidationError
 		if errors.As(err, &validationErr) {

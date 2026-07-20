@@ -140,15 +140,20 @@ export const PERMISSIONS = [
   "organization:delete",
   "project:read",
   "project:manage",
+  "project:delete",
   "workspace:read",
   "workspace:manage",
   "workspace:apply",
+  "workspace:delete",
   "machine:read",
   "machine:manage",
+  "machine:delete",
   "network_volume:read",
   "network_volume:manage",
+  "network_volume:delete",
   "compose_file:read",
   "compose_file:manage",
+  "compose_file:delete",
   "operation:read",
   "operation:deploy",
 ] as const;
@@ -387,6 +392,15 @@ export interface FleetNetwork {
   created_at: string;
 }
 
+// ComposeFileProjectLink - the trimmed view of a Project a ComposeFile is
+// linked to (id/name/slug only, matches the backend's projectSummaryResponse -
+// Fleet doesn't own the full Project shape).
+export interface ComposeFileProjectLink {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 export interface FleetVolume {
   id: string;
   organization_id: string;
@@ -426,8 +440,30 @@ export interface FleetVariable {
   created_at: string;
 }
 
-export const OPERATION_TYPES = ["deploy", "up", "down", "restart", "pull", "build", "stop", "start", "remove"] as const;
+export const OPERATION_TYPES = [
+  "deploy",
+  "up",
+  "down",
+  "restart",
+  "pull",
+  "build",
+  "stop",
+  "start",
+  "remove",
+  "config",
+  "create",
+  "kill",
+  "pause",
+  "ps",
+  "unpause",
+] as const;
 export type OperationType = (typeof OPERATION_TYPES)[number];
+
+// DESTRUCTIVE_OPERATION_TYPES - the operator's own explicit list of
+// disruptive/irreversible operations against a real remote machine,
+// gated behind an explicit confirm step (ComposeFileDetailPage's own
+// "Trigger" form), same posture as MembersPage's Remove confirm.
+export const DESTRUCTIVE_OPERATION_TYPES = new Set<OperationType>(["down", "kill", "remove", "stop", "pause"]);
 
 export type OperationStatus = "queued" | "running" | "success" | "failed";
 

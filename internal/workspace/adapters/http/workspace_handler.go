@@ -115,6 +115,35 @@ func ListWorkspacesHandler(svc *application.ListWorkspacesService) http.HandlerF
 	}
 }
 
+// DeleteWorkspaceHandler implements `DELETE /api/v1/orgs/{id}/projects/
+// {projectID}/workspaces/{workspaceID}` - gated by workspace:delete, a
+// genuine hard delete (no response body, 204).
+func DeleteWorkspaceHandler(svc *application.DeleteWorkspaceService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+
+		err := svc.Execute(r.Context(), application.DeleteWorkspaceInput{
+			OrganizationID:   r.PathValue("id"),
+			ProjectID:        r.PathValue("projectID"),
+			WorkspaceID:      r.PathValue("workspaceID"),
+			RequestingUserID: userID,
+		})
+		if err != nil {
+			if writeNotFoundOrForbidden(w, err, "workspace not found") {
+				return
+			}
+			httpserver.WriteProblem(w, http.StatusInternalServerError, "failed to delete workspace", "")
+			return
+		}
+
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 func GetWorkspaceHandler(svc *application.GetWorkspaceService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := httpserver.UserIDFromContext(r.Context())
