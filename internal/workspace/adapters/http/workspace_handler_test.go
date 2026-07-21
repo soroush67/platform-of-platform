@@ -18,7 +18,7 @@ func TestCreateWorkspaceHandler_ForbiddenWithoutPermission(t *testing.T) {
 	svc := application.NewCreateWorkspaceService(newFakeWorkspaceRepo(), newFakeEnvironmentRepo(), membership, newFakePermissionChecker(), projectChecker, newFakeOrganizationChecker())
 	handler := withAuth(httpadapter.CreateWorkspaceHandler(svc))
 
-	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/projects/project-1/workspaces", "user-1", []byte(`{"name":"ws","execution_engine":"compose"}`))
+	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/projects/project-1/workspaces", "user-1", []byte(`{"name":"ws","execution_engine":"terraform"}`))
 	req.SetPathValue("id", "org-1")
 	req.SetPathValue("projectID", "project-1")
 	rec := httptest.NewRecorder()
@@ -39,7 +39,7 @@ func TestCreateWorkspaceHandler_Succeeds(t *testing.T) {
 	svc := application.NewCreateWorkspaceService(newFakeWorkspaceRepo(), newFakeEnvironmentRepo(), membership, permChecker, projectChecker, newFakeOrganizationChecker())
 	handler := withAuth(httpadapter.CreateWorkspaceHandler(svc))
 
-	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/projects/project-1/workspaces", "user-1", []byte(`{"name":"ws","execution_engine":"compose"}`))
+	req := authedRequest(t, "POST", "/api/v1/orgs/org-1/projects/project-1/workspaces", "user-1", []byte(`{"name":"ws","execution_engine":"terraform"}`))
 	req.SetPathValue("id", "org-1")
 	req.SetPathValue("projectID", "project-1")
 	rec := httptest.NewRecorder()
@@ -52,14 +52,14 @@ func TestCreateWorkspaceHandler_Succeeds(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if body["name"] != "ws" || body["execution_engine"] != "compose" {
+	if body["name"] != "ws" || body["execution_engine"] != "terraform" {
 		t.Errorf("expected the created workspace's fields in the response, got %+v", body)
 	}
 }
 
 func TestListWorkspacesHandler_Succeeds(t *testing.T) {
 	wsRepo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace("org-1", "project-1", nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace("org-1", "project-1", nil, "ws", domain.ExecutionEngineTerraform)
 	wsRepo.put(ws)
 	membership := newFakeMembershipChecker()
 	membership.add("org-1", "user-1")
@@ -83,7 +83,7 @@ func TestListWorkspacesHandler_Succeeds(t *testing.T) {
 
 func TestGetWorkspaceHandler_WrongProjectReturnsNotFound(t *testing.T) {
 	wsRepo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace("org-1", "a-different-project", nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace("org-1", "a-different-project", nil, "ws", domain.ExecutionEngineTerraform)
 	wsRepo.put(ws)
 	membership := newFakeMembershipChecker()
 	membership.add("org-1", "user-1")

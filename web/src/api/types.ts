@@ -234,10 +234,12 @@ export interface Environment {
 }
 
 // EXECUTION_ENGINES mirrors internal/workspace/domain's closed
-// ExecutionEngine enum (8 values) - all 8 have a real Worker-side
-// implementation now (internal/worker/engine).
+// ExecutionEngine enum, minus "compose" - retired as a creatable
+// Workspace engine (Fleet's real ComposeFile/Machine/Operation system,
+// deployed over SSH and linkable to a Project, is the one real way to
+// run docker-compose now). The other 7 all have a real Worker-side
+// implementation (internal/worker/engine).
 export const EXECUTION_ENGINES = [
-  "compose",
   "terraform",
   "opentofu",
   "ansible",
@@ -365,6 +367,9 @@ export const DOCKER_STATUSES = ["unknown", "ok", "missing", "error"] as const;
 export const CREDENTIAL_TYPES = ["ssh_key", "ssh_password"] as const;
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
 
+export const CREDENTIAL_STORAGES = ["vault", "local"] as const;
+export type CredentialStorage = (typeof CREDENTIAL_STORAGES)[number];
+
 export interface Machine {
   id: string;
   organization_id: string;
@@ -373,8 +378,9 @@ export interface Machine {
   ssh_port: number;
   ssh_user: string;
   credential_type: CredentialType;
-  credential_mount_id: string;
-  credential_path: string;
+  credential_storage: CredentialStorage;
+  credential_mount_id?: string;
+  credential_path?: string;
   deploy_base_path: string;
   connection_status: (typeof CONNECTION_STATUSES)[number];
   docker_status: (typeof DOCKER_STATUSES)[number];

@@ -76,6 +76,57 @@ func CreateVariableHandler(svc *application.CreateVariableService) http.HandlerF
 	}
 }
 
+type createSecretVariableRequest struct {
+	Key     string `json:"key"`
+	MountID string `json:"mount_id"`
+	Value   string `json:"value"`
+}
+
+func CreateSecretVariableHandler(svc *application.CreateSecretVariableService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		var req createSecretVariableRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			httpserver.WriteProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+
+		variable, err := svc.Execute(r.Context(), application.CreateSecretVariableInput{
+			OrganizationID: r.PathValue("id"), RequestingUserID: userID, ComposeFileID: r.PathValue("composeFileID"),
+			Key: req.Key, MountID: req.MountID, Value: req.Value,
+		})
+		if err != nil {
+			writeFleetError(w, err, "")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(toVariableResponse(variable))
+	}
+}
+
+func RevealVariableHandler(svc *application.RevealVariableService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := httpserver.UserIDFromContext(r.Context())
+		if !ok {
+			httpserver.WriteProblem(w, http.StatusUnauthorized, "authentication required", "")
+			return
+		}
+		value, err := svc.Execute(r.Context(), r.PathValue("id"), userID, r.PathValue("variableID"))
+		if err != nil {
+			writeFleetError(w, err, "variable not found")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"value": value})
+	}
+}
+
 func ListVariablesHandler(svc *application.ListVariablesService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := httpserver.UserIDFromContext(r.Context())

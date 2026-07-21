@@ -6,11 +6,14 @@ import {
   useCheckMachineConnection,
   useCreateMachine,
   useDeleteMachine,
+  useDuplicateMachine,
   useMachines,
   useTestMachineConnection,
+  useUnarchiveMachine,
+  useUpdateMachine,
 } from "../api/hooks/useFleet";
 import { useSecretMounts, useWriteSecret } from "../api/hooks/useSecrets";
-import { CREDENTIAL_TYPES, type Machine } from "../api/types";
+import { CREDENTIAL_STORAGES, CREDENTIAL_TYPES, type CredentialStorage, type Machine } from "../api/types";
 
 function statusBadgeClass(status: string): string {
   if (status === "online" || status === "ok") return "badge-success";
@@ -32,9 +35,57 @@ export function MachinesPage() {
   const createMachine = useCreateMachine(orgId);
   const checkConnection = useCheckMachineConnection(orgId);
   const archiveMachine = useArchiveMachine(orgId);
+  const unarchiveMachine = useUnarchiveMachine(orgId);
   const deleteMachine = useDeleteMachine(orgId);
   const testConnection = useTestMachineConnection(orgId);
   const writeSecret = useWriteSecret(orgId);
+  const updateMachine = useUpdateMachine(orgId);
+  const duplicateMachine = useDuplicateMachine(orgId);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+
+  // duplicatingId - shows an editable name field (pre-filled "{name}
+  // (copy)") before the clone is actually created, one row at a time -
+  // operator's own explicit ask: see and confirm/edit the name first,
+  // not a silent instant clone.
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [duplicateNameDraft, setDuplicateNameDraft] = useState("");
+
+  function onStartDuplicate(m: Machine) {
+    setDuplicatingId(m.id);
+    setDuplicateNameDraft(`${m.name} (copy)`);
+    setDuplicateError(null);
+  }
+
+  async function onConfirmDuplicate(machineId: string) {
+    setDuplicateError(null);
+    try {
+      await duplicateMachine.mutateAsync({ machineId, name: duplicateNameDraft });
+      setDuplicatingId(null);
+    } catch {
+      setDuplicateError("Failed to duplicate - a machine with that name may already exist.");
+    }
+  }
+
+  // editingDeployPathId - inline edit, one row's Deploy base path at a
+  // time (same one-row-at-a-time posture as confirmingDeleteId below).
+  const [editingDeployPathId, setEditingDeployPathId] = useState<string | null>(null);
+  const [deployPathDraft, setDeployPathDraft] = useState("");
+  const [deployPathError, setDeployPathError] = useState<string | null>(null);
+
+  function onStartEditDeployPath(m: Machine) {
+    setEditingDeployPathId(m.id);
+    setDeployPathDraft(m.deploy_base_path);
+    setDeployPathError(null);
+  }
+
+  async function onSaveDeployPath(machineId: string) {
+    try {
+      await updateMachine.mutateAsync({ machineId, deploy_base_path: deployPathDraft });
+      setEditingDeployPathId(null);
+    } catch {
+      setDeployPathError("Failed to update deploy base path.");
+    }
+  }
 
   // confirmingDeleteId - two-step confirm for the destructive Delete
   // action, one row at a time (same pattern as elsewhere in this app).
@@ -60,6 +111,9 @@ export function MachinesPage() {
   const [sshPort, setSshPort] = useState(22);
   const [sshUser, setSshUser] = useState("");
   const [credentialType, setCredentialType] = useState<(typeof CREDENTIAL_TYPES)[number]>("ssh_key");
+  // credentialStorage defaults to "local" - no live Vault dependency to
+  // create/test a Machine unless the operator explicitly opts into Vault.
+  const [credentialStorage, setCredentialStorage] = useState<CredentialStorage>("local");
   const [credentialMountId, setCredentialMountId] = useState("");
   const [credentialPath, setCredentialPath] = useState("");
   const [secretValue, setSecretValue] = useState("");
@@ -77,10 +131,10 @@ export function MachinesPage() {
   }
 
   // writeSecretIfProvided stores secretValue into Vault at credentialPath
-  // before Test/Create proceed - KV v2 writes are upserts, so calling
-  // this from both places whenever a value is typed is harmless.
+  // before Test/Create proceed - only relevant for "vault" storage; KV v2
+  // writes are upserts, so calling this from both places is harmless.
   async function writeSecretIfProvided() {
-    if (!secretValue) return;
+    if (credentialStorage !== "vault" || !secretValue) return;
     await writeSecret.mutateAsync({ mountId: credentialMountId, path: credentialPath, value: secretValue });
   }
 
@@ -93,8 +147,10 @@ export function MachinesPage() {
         ssh_port: sshPort,
         ssh_user: sshUser,
         credential_type: credentialType,
-        credential_mount_id: credentialMountId,
-        credential_path: credentialPath,
+        credential_storage: credentialStorage,
+        credential_mount_id: credentialStorage === "vault" ? credentialMountId : undefined,
+        credential_path: credentialStorage === "vault" ? credentialPath : undefined,
+        credential_secret: credentialStorage === "local" ? secretValue : undefined,
       });
       setTestResult(`${result.connection_status} / docker: ${result.docker_status}`);
     } catch {
@@ -113,8 +169,10 @@ export function MachinesPage() {
         ssh_port: sshPort,
         ssh_user: sshUser,
         credential_type: credentialType,
-        credential_mount_id: credentialMountId,
-        credential_path: credentialPath,
+        credential_storage: credentialStorage,
+        credential_mount_id: credentialStorage === "vault" ? credentialMountId : undefined,
+        credential_path: credentialStorage === "vault" ? credentialPath : undefined,
+        credential_secret: credentialStorage === "local" ? secretValue : undefined,
         deploy_base_path: deployBasePath,
       });
       setName("");
@@ -128,6 +186,7 @@ export function MachinesPage() {
     }
   }
 
+
   return (
     <div>
       <div className="page-header">
@@ -135,6 +194,8 @@ export function MachinesPage() {
       </div>
 
       {deleteError && <div className="error-banner">{deleteError}</div>}
+      {deployPathError && <div className="error-banner">{deployPathError}</div>}
+      {duplicateError && <div className="error-banner">{duplicateError}</div>}
       {isLoading && <p className="muted">Loading…</p>}
       {machines && (
         <table>
@@ -142,6 +203,7 @@ export function MachinesPage() {
             <tr>
               <th>Name</th>
               <th>Host</th>
+              <th>Deploy base path</th>
               <th>Connection</th>
               <th>Docker</th>
               <th>Last checked</th>
@@ -154,6 +216,36 @@ export function MachinesPage() {
                 <td>{m.name}</td>
                 <td className="mono">
                   {m.ssh_user}@{m.host}:{m.ssh_port}
+                </td>
+                <td className="mono">
+                  {editingDeployPathId === m.id ? (
+                    <span className="field-row" style={{ alignItems: "center" }}>
+                      <input
+                        value={deployPathDraft}
+                        onChange={(e) => setDeployPathDraft(e.target.value)}
+                        style={{ minWidth: 160 }}
+                      />
+                      <button
+                        className="secondary"
+                        onClick={() => onSaveDeployPath(m.id)}
+                        disabled={updateMachine.isPending || !deployPathDraft}
+                      >
+                        Save
+                      </button>
+                      <button className="secondary" onClick={() => setEditingDeployPathId(null)}>
+                        Cancel
+                      </button>
+                    </span>
+                  ) : (
+                    <>
+                      {m.deploy_base_path}{" "}
+                      {!m.archived && (
+                        <button className="secondary" onClick={() => onStartEditDeployPath(m)}>
+                          Edit
+                        </button>
+                      )}
+                    </>
+                  )}
                 </td>
                 <td>
                   <span className={`badge ${statusBadgeClass(m.connection_status)}`}>{m.connection_status}</span>
@@ -172,6 +264,29 @@ export function MachinesPage() {
                       >
                         Check connection
                       </button>{" "}
+                      {duplicatingId === m.id ? (
+                        <span className="field-row" style={{ alignItems: "center" }}>
+                          <input
+                            value={duplicateNameDraft}
+                            onChange={(e) => setDuplicateNameDraft(e.target.value)}
+                            style={{ minWidth: 160 }}
+                          />
+                          <button
+                            className="secondary"
+                            onClick={() => onConfirmDuplicate(m.id)}
+                            disabled={duplicateMachine.isPending || !duplicateNameDraft}
+                          >
+                            {duplicateMachine.isPending ? "Creating…" : "Confirm"}
+                          </button>
+                          <button className="secondary" onClick={() => setDuplicatingId(null)}>
+                            Cancel
+                          </button>
+                        </span>
+                      ) : (
+                        <button className="secondary" onClick={() => onStartDuplicate(m)}>
+                          Duplicate
+                        </button>
+                      )}{" "}
                       <button
                         className="secondary"
                         onClick={() => archiveMachine.mutate(m.id)}
@@ -195,13 +310,24 @@ export function MachinesPage() {
                       )}
                     </>
                   )}
-                  {m.archived && <span className="badge badge-dim">archived</span>}
+                  {m.archived && (
+                    <>
+                      <span className="badge badge-dim">archived</span>{" "}
+                      <button
+                        className="secondary"
+                        onClick={() => unarchiveMachine.mutate(m.id)}
+                        disabled={unarchiveMachine.isPending}
+                      >
+                        Unarchive
+                      </button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}
             {machines.data.length === 0 && (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={7} className="muted">
                   No machines yet.
                 </td>
               </tr>
@@ -212,10 +338,6 @@ export function MachinesPage() {
 
       <div className="card" style={{ marginTop: 20, maxWidth: 560 }}>
         <h3>Add machine</h3>
-        <p className="muted">
-          The secret value below is written directly into the selected Secret Mount's Vault at the given path -
-          nothing to do out-of-band first.
-        </p>
         {formError && <div className="error-banner">{formError}</div>}
         <form onSubmit={onSubmit}>
           <label>
@@ -246,35 +368,71 @@ export function MachinesPage() {
               ))}
             </select>
           </label>
-          <label>
-            Secret mount
-            <select value={credentialMountId} onChange={(e) => setCredentialMountId(e.target.value)} required>
-              <option value="">— select —</option>
-              {secretMounts?.data.map((sm) => (
-                <option key={sm.id} value={sm.id}>
-                  {sm.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Secret path
-            <input
-              value={credentialPath}
-              onChange={(e) => setCredentialPath(e.target.value)}
-              placeholder="secret/data/fleet/machines/this-host"
-              required
-            />
-          </label>
-          <label>
-            Secret value ({credentialType === "ssh_key" ? "private key" : "password"})
-            <input
-              type="password"
-              value={secretValue}
-              onChange={(e) => setSecretValue(e.target.value)}
-              placeholder="leave blank if already written to Vault"
-            />
-          </label>
+
+          <label>Credential storage</label>
+          <div className="field-row" style={{ marginBottom: 10 }}>
+            {CREDENTIAL_STORAGES.map((s) => (
+              <label key={s} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <input
+                  type="radio"
+                  name="credential_storage"
+                  value={s}
+                  checked={credentialStorage === s}
+                  onChange={() => setCredentialStorage(s)}
+                />
+                {s === "local" ? "Local (encrypted, no Vault needed)" : "Vault"}
+              </label>
+            ))}
+          </div>
+
+          {credentialStorage === "vault" ? (
+            <>
+              <p className="muted">
+                The secret value below is written directly into the selected Secret Mount's Vault at the given path -
+                nothing to do out-of-band first.
+              </p>
+              <label>
+                Secret mount
+                <select value={credentialMountId} onChange={(e) => setCredentialMountId(e.target.value)} required>
+                  <option value="">— select —</option>
+                  {secretMounts?.data.map((sm) => (
+                    <option key={sm.id} value={sm.id}>
+                      {sm.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Secret path
+                <input
+                  value={credentialPath}
+                  onChange={(e) => setCredentialPath(e.target.value)}
+                  placeholder="secret/data/fleet/machines/this-host"
+                  required
+                />
+              </label>
+              <label>
+                Secret value ({credentialType === "ssh_key" ? "private key" : "password"})
+                <input
+                  type="password"
+                  value={secretValue}
+                  onChange={(e) => setSecretValue(e.target.value)}
+                  placeholder="leave blank if already written to Vault"
+                />
+              </label>
+            </>
+          ) : (
+            <label>
+              {credentialType === "ssh_key" ? "Private key" : "Password"} (encrypted at rest, no Vault involved)
+              <input
+                type="password"
+                value={secretValue}
+                onChange={(e) => setSecretValue(e.target.value)}
+                required
+              />
+            </label>
+          )}
+
           <label>
             Deploy base path
             <input value={deployBasePath} onChange={(e) => setDeployBasePath(e.target.value)} required />
@@ -284,7 +442,11 @@ export function MachinesPage() {
             className="secondary"
             onClick={onTest}
             disabled={
-              testConnection.isPending || writeSecret.isPending || !host || !sshUser || !credentialMountId || !credentialPath
+              testConnection.isPending ||
+              writeSecret.isPending ||
+              !host ||
+              !sshUser ||
+              (credentialStorage === "vault" ? !credentialMountId || !credentialPath : !secretValue)
             }
           >
             Test connection

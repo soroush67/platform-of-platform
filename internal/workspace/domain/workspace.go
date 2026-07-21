@@ -19,6 +19,16 @@ const (
 	ExecutionEngineOpenTofu  ExecutionEngine = "opentofu"
 	ExecutionEngineAnsible   ExecutionEngine = "ansible"
 	ExecutionEngineHelm      ExecutionEngine = "helm"
+	// ExecutionEngineCompose is deliberately EXCLUDED from valid() below -
+	// retired as a *creatable* Workspace engine (operator's own explicit
+	// choice: Fleet's real ComposeFile/Machine/Operation system, deployed
+	// over SSH to real remote machines and linkable to a Project, is the
+	// one real way to run docker-compose now - this engine only ever ran
+	// locally on the Worker's own Docker daemon, a confusing overlap).
+	// The constant stays defined (not deleted) because existing rows with
+	// execution_engine='compose' are read directly by the postgres
+	// adapter, never through NewWorkspace/valid() - they stay genuinely
+	// readable/runnable, only new creation is blocked.
 	ExecutionEngineCompose   ExecutionEngine = "compose"
 	ExecutionEnginePacker    ExecutionEngine = "packer"
 	ExecutionEngineKubespray ExecutionEngine = "kubespray"
@@ -28,7 +38,7 @@ const (
 func (e ExecutionEngine) valid() bool {
 	switch e {
 	case ExecutionEngineTerraform, ExecutionEngineOpenTofu, ExecutionEngineAnsible, ExecutionEngineHelm,
-		ExecutionEngineCompose, ExecutionEnginePacker, ExecutionEngineKubespray, ExecutionEngineK8s:
+		ExecutionEnginePacker, ExecutionEngineKubespray, ExecutionEngineK8s:
 		return true
 	}
 	return false
@@ -67,7 +77,7 @@ func NewWorkspace(organizationID, projectID string, environmentID *string, name 
 		return nil, &ValidationError{Message: "name must start with a letter/digit and contain only letters, digits, - or _"}
 	}
 	if !engine.valid() {
-		return nil, &ValidationError{Message: "execution_engine must be one of terraform, opentofu, ansible, helm, compose, packer, kubespray, kubernetes"}
+		return nil, &ValidationError{Message: "execution_engine must be one of terraform, opentofu, ansible, helm, packer, kubespray, kubernetes - compose is no longer available here, link a Compose file to this project instead"}
 	}
 
 	return &Workspace{

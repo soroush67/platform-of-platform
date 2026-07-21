@@ -31,6 +31,7 @@ type DeployExecutor struct {
 	publisher      LogPublisher
 	pollInterval   time.Duration
 	batchSize      int
+	masterKey      []byte
 	logger         *slog.Logger
 }
 
@@ -45,12 +46,13 @@ func NewDeployExecutor(
 	sshRunner SSHRunner,
 	publisher LogPublisher,
 	pollInterval time.Duration,
+	masterKey []byte,
 	logger *slog.Logger,
 ) *DeployExecutor {
 	return &DeployExecutor{
 		scanner: scanner, operations: operations, machines: machines, composeFiles: composeFiles,
 		variables: variables, attachments: attachments, secretResolver: secretResolver,
-		ssh: sshRunner, publisher: publisher, pollInterval: pollInterval, batchSize: 20, logger: logger,
+		ssh: sshRunner, publisher: publisher, pollInterval: pollInterval, batchSize: 20, masterKey: masterKey, logger: logger,
 	}
 }
 
@@ -117,7 +119,7 @@ func (e *DeployExecutor) execute(ctx context.Context, organizationID, operationI
 		return
 	}
 
-	secret, err := e.secretResolver.ResolveValue(ctx, organizationID, machine.CredentialRef.MountID, machine.CredentialRef.Path)
+	secret, err := resolveMachineCredential(ctx, e.secretResolver, e.masterKey, machine)
 	if err != nil {
 		e.finishWithError(ctx, organizationID, operationID, fmt.Errorf("resolve machine credential: %w", err))
 		return

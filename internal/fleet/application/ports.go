@@ -27,6 +27,7 @@ type MachineRepository interface {
 	// archive-fallback behavior.
 	Delete(ctx context.Context, actorUserID, organizationID, id string) error
 	Archive(ctx context.Context, actorUserID, organizationID, id string) error
+	Unarchive(ctx context.Context, actorUserID, organizationID, id string) error
 }
 
 type NetworkRepository interface {
@@ -173,6 +174,17 @@ func (f SecretMountCheckerFunc) SecretMountExists(ctx context.Context, organizat
 // structural-satisfaction pattern Variables' own SecretResolver uses.
 type SecretResolver interface {
 	ResolveValue(ctx context.Context, organizationID, mountID, path string) (string, error)
+}
+
+// SecretWriter mirrors SecretResolver's own structural-satisfaction
+// pattern (secrets/application's WriteSecretService.WriteValue, wired
+// with zero adapter glue in main.go) but for writes. Fleet's vault-
+// backed variable creation calls this directly at compose_file:manage
+// tier - deliberately NOT routed through WriteSecretService.Execute,
+// which re-checks organization:manage, a broader/different permission
+// than the rest of this file's variable-write flow already uses.
+type SecretWriter interface {
+	WriteValue(ctx context.Context, organizationID, mountID, path, value string) error
 }
 
 // LogPublisher is DeployExecutor's own port into the Redis Pub/Sub

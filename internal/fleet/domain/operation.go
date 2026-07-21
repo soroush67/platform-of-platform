@@ -21,6 +21,17 @@ const (
 	OperationTypeStop    OperationType = "stop"
 	OperationTypeStart   OperationType = "start"
 	OperationTypeRemove  OperationType = "remove"
+	// The 6 below extend the original 9 to the operator's own explicit
+	// docker-compose subcommand list - `run` was deliberately left out
+	// (it needs a service + command argument, not a plain subcommand,
+	// unlike every type here) - a real, scoped-down follow-up if it's
+	// ever asked for.
+	OperationTypeConfig  OperationType = "config"
+	OperationTypeCreate  OperationType = "create"
+	OperationTypeKill    OperationType = "kill"
+	OperationTypePause   OperationType = "pause"
+	OperationTypePs      OperationType = "ps"
+	OperationTypeUnpause OperationType = "unpause"
 )
 
 func (t OperationType) Valid() bool {
@@ -43,6 +54,12 @@ var ComposeSubcommand = map[OperationType]string{
 	OperationTypeStop:    "stop",
 	OperationTypeStart:   "start",
 	OperationTypeRemove:  "rm -f -s",
+	OperationTypeConfig:  "config",
+	OperationTypeCreate:  "create",
+	OperationTypeKill:    "kill",
+	OperationTypePause:   "pause",
+	OperationTypePs:      "ps",
+	OperationTypeUnpause: "unpause",
 }
 
 // OperationStatus adds a real "queued" state the Python original never

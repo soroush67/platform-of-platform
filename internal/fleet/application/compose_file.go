@@ -16,12 +16,13 @@ type CreateComposeFileInput struct {
 
 type CreateComposeFileService struct {
 	repo        ComposeFileRepository
+	variables   VariableRepository
 	membership  MembershipChecker
 	permChecker PermissionChecker
 }
 
-func NewCreateComposeFileService(repo ComposeFileRepository, membership MembershipChecker, permChecker PermissionChecker) *CreateComposeFileService {
-	return &CreateComposeFileService{repo: repo, membership: membership, permChecker: permChecker}
+func NewCreateComposeFileService(repo ComposeFileRepository, variables VariableRepository, membership MembershipChecker, permChecker PermissionChecker) *CreateComposeFileService {
+	return &CreateComposeFileService{repo: repo, variables: variables, membership: membership, permChecker: permChecker}
 }
 
 func (s *CreateComposeFileService) Execute(ctx context.Context, in CreateComposeFileInput) (*domain.ComposeFile, error) {
@@ -51,6 +52,11 @@ func (s *CreateComposeFileService) Execute(ctx context.Context, in CreateCompose
 	if err := s.repo.Create(ctx, composeFile); err != nil {
 		return nil, err
 	}
+
+	if err := syncEnvVariablesFromCompose(ctx, s.variables, in.RequestingUserID, in.OrganizationID, composeFile.ID, in.ComposeContent); err != nil {
+		return nil, err
+	}
+
 	return composeFile, nil
 }
 
@@ -112,12 +118,13 @@ func (s *GetComposeFileService) Execute(ctx context.Context, organizationID, req
 
 type UpdateComposeFileContentService struct {
 	repo        ComposeFileRepository
+	variables   VariableRepository
 	membership  MembershipChecker
 	permChecker PermissionChecker
 }
 
-func NewUpdateComposeFileContentService(repo ComposeFileRepository, membership MembershipChecker, permChecker PermissionChecker) *UpdateComposeFileContentService {
-	return &UpdateComposeFileContentService{repo: repo, membership: membership, permChecker: permChecker}
+func NewUpdateComposeFileContentService(repo ComposeFileRepository, variables VariableRepository, membership MembershipChecker, permChecker PermissionChecker) *UpdateComposeFileContentService {
+	return &UpdateComposeFileContentService{repo: repo, variables: variables, membership: membership, permChecker: permChecker}
 }
 
 func (s *UpdateComposeFileContentService) Execute(ctx context.Context, organizationID, requestingUserID, composeFileID, content string) error {
@@ -140,7 +147,11 @@ func (s *UpdateComposeFileContentService) Execute(ctx context.Context, organizat
 		return err
 	}
 
-	return s.repo.UpdateContent(ctx, requestingUserID, organizationID, composeFileID, content)
+	if err := s.repo.UpdateContent(ctx, requestingUserID, organizationID, composeFileID, content); err != nil {
+		return err
+	}
+
+	return syncEnvVariablesFromCompose(ctx, s.variables, requestingUserID, organizationID, composeFileID, content)
 }
 
 // DeleteComposeFileService - gated by compose_file:delete (Owner-only,

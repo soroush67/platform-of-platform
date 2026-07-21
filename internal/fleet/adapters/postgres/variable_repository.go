@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"platform-of-platform/internal/fleet/domain"
@@ -46,6 +48,10 @@ func (r *VariableRepository) Create(ctx context.Context, actorUserID string, v *
 		v.ID, v.OrganizationID, v.ComposeFileID, v.Key, string(v.VarType), value, mountID, path, fileTargetPath, v.CreatedAt,
 	)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrVariableKeyTaken
+		}
 		return err
 	}
 

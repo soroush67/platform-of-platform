@@ -11,8 +11,13 @@ package domain
 import "errors"
 
 var (
-	ErrMachineNotFound         = errors.New("machine not found")
-	ErrMachineHasHistory       = errors.New("machine has operation history and cannot be hard-deleted")
+	ErrMachineNotFound   = errors.New("machine not found")
+	ErrMachineHasHistory = errors.New("machine has operation history and cannot be hard-deleted")
+	// ErrMachineNameTaken - a real 23505 unique-violation against
+	// machines' own UNIQUE (organization_id, name) - DuplicateMachineService
+	// catches this to retry with an incremented "(copy N)" suffix, not
+	// surfaced to the caller under normal use.
+	ErrMachineNameTaken        = errors.New("a machine with this name already exists in this organization")
 	ErrNetworkNotFound         = errors.New("network not found")
 	ErrNetworkInUse            = errors.New("network is still attached to a compose file")
 	ErrVolumeNotFound          = errors.New("volume not found")
@@ -27,9 +32,18 @@ var (
 	// propagates straight to the caller as a real 409.
 	ErrComposeFileHasHistory = errors.New("compose file has operation history and cannot be deleted")
 	ErrVariableNotFound      = errors.New("variable not found")
-	ErrOperationNotFound     = errors.New("operation not found")
-	ErrOperationNotClaimed   = errors.New("operation was not in a claimable state")
-	ErrForbidden             = errors.New("forbidden")
+	// ErrVariableKeyTaken - a real 23505 unique-violation against
+	// fleet_variables' own UNIQUE (compose_file_id, key), regardless of
+	// var_type. Surfaces whenever a caller (manual "Add variable" in the
+	// UI, or a second compose-file save whose scanned environment: block
+	// now collides with a key someone already created by hand) tries to
+	// create a second Variable under a key that already exists on that
+	// ComposeFile - a real 409, not the unmapped 500 this used to fall
+	// through to.
+	ErrVariableKeyTaken    = errors.New("a variable with this key already exists on this compose file")
+	ErrOperationNotFound   = errors.New("operation not found")
+	ErrOperationNotClaimed = errors.New("operation was not in a claimable state")
+	ErrForbidden           = errors.New("forbidden")
 	// ErrProjectNotFound - Fleet doesn't own Project (Tenancy does), but
 	// AttachProject needs its own sentinel for "the project_id the client
 	// supplied doesn't exist in this org," verified via ProjectChecker,

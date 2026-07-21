@@ -17,7 +17,7 @@ func TestCreateWorkspaceService_RequiresWorkspaceManage(t *testing.T) {
 	svc := application.NewCreateWorkspaceService(newFakeWorkspaceRepo(), newFakeEnvironmentRepo(), membership, newFakePermissionChecker(), projectChecker, newFakeOrganizationChecker())
 
 	_, err := svc.Execute(context.Background(), application.CreateWorkspaceInput{
-		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws", ExecutionEngine: domain.ExecutionEngineCompose,
+		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws", ExecutionEngine: domain.ExecutionEngineTerraform,
 	})
 	if !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("expected ErrForbidden without workspace:manage, got: %v", err)
@@ -36,7 +36,7 @@ func TestCreateWorkspaceService_ArchivedOrgRejected(t *testing.T) {
 
 	svc := application.NewCreateWorkspaceService(newFakeWorkspaceRepo(), newFakeEnvironmentRepo(), membership, permChecker, projectChecker, orgChecker)
 	_, err := svc.Execute(context.Background(), application.CreateWorkspaceInput{
-		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws", ExecutionEngine: domain.ExecutionEngineCompose,
+		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws", ExecutionEngine: domain.ExecutionEngineTerraform,
 	})
 	if !errors.Is(err, domain.ErrOrganizationArchived) {
 		t.Fatalf("expected ErrOrganizationArchived, got: %v", err)
@@ -57,7 +57,7 @@ func TestCreateWorkspaceService_EnvironmentMustBelongToSameProject(t *testing.T)
 	svc := application.NewCreateWorkspaceService(newFakeWorkspaceRepo(), envRepo, membership, permChecker, projectChecker, newFakeOrganizationChecker())
 	_, err := svc.Execute(context.Background(), application.CreateWorkspaceInput{
 		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws",
-		ExecutionEngine: domain.ExecutionEngineCompose, EnvironmentID: &wrongProjectEnv.ID,
+		ExecutionEngine: domain.ExecutionEngineTerraform, EnvironmentID: &wrongProjectEnv.ID,
 	})
 	var validationErr *domain.ValidationError
 	if !errors.As(err, &validationErr) {
@@ -76,7 +76,7 @@ func TestCreateWorkspaceService_Succeeds(t *testing.T) {
 
 	svc := application.NewCreateWorkspaceService(repo, newFakeEnvironmentRepo(), membership, permChecker, projectChecker, newFakeOrganizationChecker())
 	ws, err := svc.Execute(context.Background(), application.CreateWorkspaceInput{
-		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws", ExecutionEngine: domain.ExecutionEngineCompose,
+		OrganizationID: testOrgID, ProjectID: testProjectID, RequestingUserID: "member-1", Name: "ws", ExecutionEngine: domain.ExecutionEngineTerraform,
 	})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -92,7 +92,7 @@ func TestGetWorkspaceService_RejectsWorkspaceFromAnotherProject(t *testing.T) {
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add(testOrgID, testProjectID)
 	repo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace(testOrgID, "a-different-project", nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(testOrgID, "a-different-project", nil, "ws", domain.ExecutionEngineTerraform)
 	repo.put(ws)
 
 	permChecker := newFakePermissionChecker()
@@ -110,7 +110,7 @@ func TestGetWorkspaceService_RequiresVisibilityGrant(t *testing.T) {
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add(testOrgID, testProjectID)
 	repo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineTerraform)
 	repo.put(ws)
 
 	// No organization:manage and no project/workspace-scope grant at
@@ -138,8 +138,8 @@ func TestListWorkspacesService_ScopedToProject(t *testing.T) {
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add(testOrgID, testProjectID)
 	repo := newFakeWorkspaceRepo()
-	inProject, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws-a", domain.ExecutionEngineCompose)
-	otherProject, _ := domain.NewWorkspace(testOrgID, "other-project", nil, "ws-b", domain.ExecutionEngineCompose)
+	inProject, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws-a", domain.ExecutionEngineTerraform)
+	otherProject, _ := domain.NewWorkspace(testOrgID, "other-project", nil, "ws-b", domain.ExecutionEngineTerraform)
 	repo.put(inProject)
 	repo.put(otherProject)
 

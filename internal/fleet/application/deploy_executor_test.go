@@ -28,6 +28,11 @@ func newFakeMachineRepo() *fakeMachineRepo {
 func (f *fakeMachineRepo) Create(ctx context.Context, actorUserID string, m *domain.Machine) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	for _, existing := range f.machines {
+		if existing.OrganizationID == m.OrganizationID && existing.Name == m.Name {
+			return domain.ErrMachineNameTaken
+		}
+	}
 	f.machines[m.ID] = m
 	return nil
 }
@@ -62,6 +67,12 @@ func (f *fakeMachineRepo) Archive(ctx context.Context, actorUserID, organization
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.archived[id] = true
+	return nil
+}
+func (f *fakeMachineRepo) Unarchive(ctx context.Context, actorUserID, organizationID, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.archived[id] = false
 	return nil
 }
 
@@ -264,12 +275,16 @@ type fakeSSHRunner struct {
 	runCalls     int
 	lastCommand  string
 	lastFiles    []application.RemoteFile
+	lastTarget   application.ConnectionTarget
 	exitCode     int
 	output       string
 	streamedLine string
 }
 
 func (f *fakeSSHRunner) Probe(ctx context.Context, target application.ConnectionTarget) (domain.ConnectionStatus, domain.DockerStatus, error) {
+	f.mu.Lock()
+	f.lastTarget = target
+	f.mu.Unlock()
 	return domain.ConnectionStatusOnline, domain.DockerStatusOK, nil
 }
 func (f *fakeSSHRunner) RunOperation(ctx context.Context, target application.ConnectionTarget, files []application.RemoteFile, command string, onLine func(string)) (int, string, error) {
@@ -327,7 +342,7 @@ func TestDeployExecutor_ClaimsExecutesAndPersistsSuccess(t *testing.T) {
 
 	executor := application.NewDeployExecutor(
 		&fakeScanner{repo: operations}, operations, machines, composeFiles, variables, attachments,
-		secretResolver, sshRunner, publisher, 10*time.Millisecond, slog.New(slog.DiscardHandler),
+		secretResolver, sshRunner, publisher, 10*time.Millisecond, testMasterKey, slog.New(slog.DiscardHandler),
 	)
 
 	// Run is the same Runnable shape outbox.Relay's own tests drive
@@ -389,7 +404,7 @@ func TestDeployExecutor_ScrubsSecretValuesFromPublishedLines(t *testing.T) {
 
 	executor := application.NewDeployExecutor(
 		&fakeScanner{repo: operations}, operations, machines, composeFiles, variables, attachments,
-		secretResolver, sshRunner, publisher, 10*time.Millisecond, slog.New(slog.DiscardHandler),
+		secretResolver, sshRunner, publisher, 10*time.Millisecond, testMasterKey, slog.New(slog.DiscardHandler),
 	)
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()

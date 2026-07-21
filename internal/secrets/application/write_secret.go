@@ -54,7 +54,20 @@ func (s *WriteSecretService) Execute(ctx context.Context, in WriteSecretInput) e
 		return &domain.ValidationError{Message: "path and value are both required"}
 	}
 
-	mount, err := s.repo.GetByID(ctx, in.OrganizationID, in.MountID)
+	return s.WriteValue(ctx, in.OrganizationID, in.MountID, in.Path, in.Value)
+}
+
+// WriteValue - no RBAC of its own, same trusted-cross-context-port
+// pattern as ResolveSecretService.ResolveValue (resolve_secret.go): the
+// caller has already gated on its own scope's permission before ever
+// reaching this, so a redundant organization:manage check here
+// wouldn't fit a narrower caller (e.g. Fleet's own compose_file:manage-
+// gated vault-backed Variable creation). Execute (this service's own
+// HTTP-facing entrypoint, used directly by POST .../secret-mounts/{id}/
+// secrets) still does the full organization:manage check above before
+// ever calling this.
+func (s *WriteSecretService) WriteValue(ctx context.Context, organizationID, mountID, path, value string) error {
+	mount, err := s.repo.GetByID(ctx, organizationID, mountID)
 	if err != nil {
 		return err
 	}
@@ -66,7 +79,7 @@ func (s *WriteSecretService) Execute(ctx context.Context, in WriteSecretInput) e
 
 	switch mount.BackendType {
 	case domain.BackendTypeVault:
-		return s.vault.WriteSecret(ctx, mount.Address, mount.RoleID, secretID, in.Path, in.Value)
+		return s.vault.WriteSecret(ctx, mount.Address, mount.RoleID, secretID, path, value)
 	default:
 		return &domain.ValidationError{Message: "backend_type " + string(mount.BackendType) + " is not yet implemented"}
 	}

@@ -6,6 +6,7 @@ import {
   isTerminalOperationStatus,
   type ComposeFile,
   type ComposeFileProjectLink,
+  type CredentialStorage,
   type CredentialType,
   type FleetNetwork,
   type FleetVariable,
@@ -42,8 +43,14 @@ export interface CreateMachineInput {
   ssh_port: number;
   ssh_user: string;
   credential_type: CredentialType;
-  credential_mount_id: string;
-  credential_path: string;
+  credential_storage: CredentialStorage;
+  // credential_mount_id/credential_path are used when credential_storage
+  // is "vault"; credential_secret (plaintext, sealed server-side) is
+  // used when credential_storage is "local" - exactly one set is ever
+  // populated per call.
+  credential_mount_id?: string;
+  credential_path?: string;
+  credential_secret?: string;
   deploy_base_path: string;
 }
 
@@ -61,6 +68,9 @@ export interface UpdateMachineInput {
   credential_type?: CredentialType;
   credential_mount_id?: string;
   credential_path?: string;
+  // credential_secret re-seals a local-storage Machine's own secret -
+  // only valid for a Machine already using credential_storage "local".
+  credential_secret?: string;
   deploy_base_path?: string;
 }
 
@@ -86,6 +96,36 @@ export function useArchiveMachine(orgId: string) {
   });
 }
 
+// useUnarchiveMachine reverses useArchiveMachine - archiving a Machine
+// was previously a one-way door in this UI even though the underlying
+// state was always reversible.
+export function useUnarchiveMachine(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (machineId: string) =>
+      apiFetch<void>(`/orgs/${orgId}/machines/${machineId}/unarchive`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "machines"] }),
+  });
+}
+
+// useDuplicateMachine - a real clone, including the credential itself
+// (mount+path for vault storage, the already-sealed bytes for local
+// storage) - never touches plaintext, never asks the caller to re-enter
+// anything. name is the exact name to create the clone under (the UI
+// shows "{name} (copy)" for the operator to confirm/edit first); a real
+// 409 on conflict, not silently renamed.
+export function useDuplicateMachine(orgId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ machineId, name }: { machineId: string; name: string }) =>
+      apiFetch<Machine>(`/orgs/${orgId}/machines/${machineId}/duplicate`, {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "machines"] }),
+  });
+}
+
 // useDeleteMachine - a genuine hard delete, no archive fallback. Real
 // 409 if the Machine has Operation history (surfaced by the caller, not
 // silently turned into an archive).
@@ -103,8 +143,10 @@ export interface TestMachineConnectionInput {
   ssh_port: number;
   ssh_user: string;
   credential_type: CredentialType;
-  credential_mount_id: string;
-  credential_path: string;
+  credential_storage: CredentialStorage;
+  credential_mount_id?: string;
+  credential_path?: string;
+  credential_secret?: string;
 }
 
 // useTestMachineConnection probes WITHOUT a saved Machine row - lets an
@@ -404,6 +446,40 @@ export function useDeleteFleetVariable(orgId: string, composeFileId: string) {
     mutationFn: (variableId: string) =>
       apiFetch<void>(`/orgs/${orgId}/compose-files/${composeFileId}/variables/${variableId}`, { method: "DELETE" }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "compose-files", composeFileId, "variables"] }),
+  });
+}
+
+export interface CreateFleetSecretVariableInput {
+  key: string;
+  mount_id: string;
+  value: string;
+}
+
+// useCreateFleetSecretVariable writes the real value into Vault itself
+// (one copy per Project this compose file is linked to, path auto-
+// derived server-side) and creates the Variable in one call - unlike
+// useCreateFleetVariable's own "secret" mode, which only ever
+// references a path that must already exist.
+export function useCreateFleetSecretVariable(orgId: string, composeFileId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateFleetSecretVariableInput) =>
+      apiFetch<FleetVariable>(`/orgs/${orgId}/compose-files/${composeFileId}/variables/secret`, {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["orgs", orgId, "compose-files", composeFileId, "variables"] }),
+  });
+}
+
+// useRevealFleetVariable - deliberately a useMutation, not a cached
+// useQuery, same by-design choice useResolveVariable already makes
+// (web/src/api/hooks/useVariables.ts) - a revealed secret value is
+// never cached client-side either.
+export function useRevealFleetVariable(orgId: string, composeFileId: string) {
+  return useMutation({
+    mutationFn: (variableId: string) =>
+      apiFetch<{ value: string }>(`/orgs/${orgId}/compose-files/${composeFileId}/variables/${variableId}/reveal`),
   });
 }
 

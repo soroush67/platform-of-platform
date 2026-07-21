@@ -15,7 +15,7 @@ func TestDeleteWorkspaceService_RequiresWorkspaceDelete(t *testing.T) {
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add(testOrgID, testProjectID)
 	wsRepo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineTerraform)
 	wsRepo.put(ws)
 
 	permChecker := newFakePermissionChecker()
@@ -45,7 +45,7 @@ func TestDeleteWorkspaceService_NonMemberGetsProjectNotFound(t *testing.T) {
 	projectChecker := newFakeProjectChecker()
 	projectChecker.add(testOrgID, testProjectID)
 	wsRepo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineTerraform)
 	wsRepo.put(ws)
 
 	svc := application.NewDeleteWorkspaceService(wsRepo, wsRepo, membership, newFakePermissionChecker(), projectChecker)
@@ -66,7 +66,7 @@ func TestDeleteWorkspaceService_WrongProjectGetsWorkspaceNotFound(t *testing.T) 
 	projectChecker.add(testOrgID, testProjectID)
 	projectChecker.add(testOrgID, "a-different-project")
 	wsRepo := newFakeWorkspaceRepo()
-	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(testOrgID, testProjectID, nil, "ws", domain.ExecutionEngineTerraform)
 	wsRepo.put(ws)
 
 	svc := application.NewDeleteWorkspaceService(wsRepo, wsRepo, membership, permChecker, projectChecker)

@@ -111,6 +111,51 @@ func (s *ListVariablesService) Execute(ctx context.Context, organizationID, requ
 	return variables, nil
 }
 
+// RevealVariableService live-resolves a secret-typed Variable's real
+// value from Vault - Fleet's own equivalent of the sibling
+// internal/variables context's already-existing ResolveVariableService,
+// previously missing here entirely (a secret-typed fleet_variables row
+// could be created/referenced but never viewed again through this
+// context). Never persisted anywhere, matching every other resolve path
+// in this codebase.
+type RevealVariableService struct {
+	repo           VariableRepository
+	membership     MembershipChecker
+	permChecker    PermissionChecker
+	secretResolver SecretResolver
+}
+
+func NewRevealVariableService(repo VariableRepository, membership MembershipChecker, permChecker PermissionChecker, secretResolver SecretResolver) *RevealVariableService {
+	return &RevealVariableService{repo: repo, membership: membership, permChecker: permChecker, secretResolver: secretResolver}
+}
+
+func (s *RevealVariableService) Execute(ctx context.Context, organizationID, requestingUserID, variableID string) (string, error) {
+	isMember, err := s.membership.IsMember(ctx, organizationID, requestingUserID)
+	if err != nil {
+		return "", err
+	}
+	if !isMember {
+		return "", domain.ErrForbidden
+	}
+	allowed, err := s.permChecker.HasPermission(ctx, organizationID, requestingUserID, permissionComposeFileRead)
+	if err != nil {
+		return "", err
+	}
+	if !allowed {
+		return "", domain.ErrForbidden
+	}
+
+	variable, err := s.repo.GetByID(ctx, organizationID, variableID)
+	if err != nil {
+		return "", err
+	}
+	if variable.VarType != domain.VarTypeSecret || variable.SecretRef == nil {
+		return "", &domain.ValidationError{Message: "only secret-typed variables can be revealed"}
+	}
+
+	return s.secretResolver.ResolveValue(ctx, organizationID, variable.SecretRef.MountID, variable.SecretRef.Path)
+}
+
 type UpdateVariableInput struct {
 	OrganizationID   string
 	RequestingUserID string

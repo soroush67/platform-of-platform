@@ -327,24 +327,33 @@ func main() {
 	createVolumeService := fleetapp.NewCreateVolumeService(fleetVolumeRepo, membershipRepo, roleBindingRepo)
 	listVolumesService := fleetapp.NewListVolumesService(fleetVolumeRepo, membershipRepo, roleBindingRepo)
 	deleteVolumeService := fleetapp.NewDeleteVolumeService(fleetVolumeRepo, membershipRepo, roleBindingRepo)
-	createMachineService := fleetapp.NewCreateMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc)
+	createMachineService := fleetapp.NewCreateMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc, cfg.SecretsMasterKey)
 	listMachinesService := fleetapp.NewListMachinesService(fleetMachineRepo, membershipRepo, roleBindingRepo)
 	getMachineService := fleetapp.NewGetMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo)
-	updateMachineService := fleetapp.NewUpdateMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc)
+	updateMachineService := fleetapp.NewUpdateMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc, cfg.SecretsMasterKey)
 	archiveMachineService := fleetapp.NewArchiveMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo)
+	unarchiveMachineService := fleetapp.NewUnarchiveMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo)
 	deleteMachineService := fleetapp.NewDeleteMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo)
+	duplicateMachineService := fleetapp.NewDuplicateMachineService(fleetMachineRepo, membershipRepo, roleBindingRepo)
 	testMachineConnectionService := fleetapp.NewTestMachineConnectionService(membershipRepo, roleBindingRepo, resolveSecretService, fleetSSHClient)
-	checkMachineConnectionService := fleetapp.NewCheckMachineConnectionService(fleetMachineRepo, membershipRepo, roleBindingRepo, resolveSecretService, fleetSSHClient)
-	createComposeFileService := fleetapp.NewCreateComposeFileService(fleetComposeFileRepo, membershipRepo, roleBindingRepo)
+	checkMachineConnectionService := fleetapp.NewCheckMachineConnectionService(fleetMachineRepo, membershipRepo, roleBindingRepo, resolveSecretService, fleetSSHClient, cfg.SecretsMasterKey)
+	createComposeFileService := fleetapp.NewCreateComposeFileService(fleetComposeFileRepo, fleetVariableRepo, membershipRepo, roleBindingRepo)
 	listComposeFilesService := fleetapp.NewListComposeFilesService(fleetComposeFileRepo, membershipRepo, roleBindingRepo)
 	getComposeFileService := fleetapp.NewGetComposeFileService(fleetComposeFileRepo, membershipRepo, roleBindingRepo)
-	updateComposeFileContentService := fleetapp.NewUpdateComposeFileContentService(fleetComposeFileRepo, membershipRepo, roleBindingRepo)
+	updateComposeFileContentService := fleetapp.NewUpdateComposeFileContentService(fleetComposeFileRepo, fleetVariableRepo, membershipRepo, roleBindingRepo)
 	deleteComposeFileService := fleetapp.NewDeleteComposeFileService(fleetComposeFileRepo, membershipRepo, roleBindingRepo)
 	fleetAttachmentService := fleetapp.NewAttachmentService(fleetAttachmentRepo, membershipRepo, roleBindingRepo, projectRepo)
 	createFleetVariableService := fleetapp.NewCreateVariableService(fleetVariableRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc)
 	listFleetVariablesService := fleetapp.NewListVariablesService(fleetVariableRepo, membershipRepo, roleBindingRepo)
 	updateFleetVariableService := fleetapp.NewUpdateVariableService(fleetVariableRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc)
 	deleteFleetVariableService := fleetapp.NewDeleteVariableService(fleetVariableRepo, membershipRepo, roleBindingRepo)
+	// createSecretVariableService/revealVariableService: writeSecretService/
+	// resolveSecretService (both already constructed above for the plain
+	// Secrets HTTP routes) structurally satisfy Fleet's own SecretWriter/
+	// SecretResolver ports with zero adapter glue - same cross-context
+	// bridge pattern secretMountCheckerFunc already uses.
+	createSecretVariableService := fleetapp.NewCreateSecretVariableService(fleetVariableRepo, fleetAttachmentRepo, membershipRepo, roleBindingRepo, secretMountCheckerFunc, writeSecretService)
+	revealVariableService := fleetapp.NewRevealVariableService(fleetVariableRepo, membershipRepo, roleBindingRepo, resolveSecretService)
 	triggerOperationService := fleetapp.NewTriggerOperationService(fleetOperationRepo, fleetComposeFileRepo, fleetMachineRepo, membershipRepo, roleBindingRepo)
 	listOperationsService := fleetapp.NewListOperationsService(fleetOperationRepo, membershipRepo, roleBindingRepo)
 	getOperationService := fleetapp.NewGetOperationService(fleetOperationRepo, membershipRepo, roleBindingRepo)
@@ -355,7 +364,7 @@ func main() {
 	// interval matches outbox.Relay's own.
 	fleetDeployExecutor := fleetapp.NewDeployExecutor(
 		fleetOperationScanner, fleetOperationRepo, fleetMachineRepo, fleetComposeFileRepo, fleetVariableRepo,
-		fleetAttachmentRepo, resolveSecretService, fleetSSHClient, fleetLogPublisher, 2*time.Second, logger,
+		fleetAttachmentRepo, resolveSecretService, fleetSSHClient, fleetLogPublisher, 2*time.Second, cfg.SecretsMasterKey, logger,
 	)
 
 	runDispatchService := executionapp.NewRunDispatchService(runRepo, workspaceRepo, resolveVariableService, workerRegistry, workspaceRepo)
@@ -603,7 +612,9 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orgs/{id}/machines/{machineID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.GetMachineHandler(getMachineService)))
 	mux.HandleFunc("PATCH /api/v1/orgs/{id}/machines/{machineID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.UpdateMachineHandler(updateMachineService)))
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}/machines/{machineID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.ArchiveMachineHandler(archiveMachineService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/machines/{machineID}/unarchive", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.UnarchiveMachineHandler(unarchiveMachineService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/machines/{machineID}/hard-delete", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.DeleteMachineHandler(deleteMachineService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/machines/{machineID}/duplicate", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.DuplicateMachineHandler(duplicateMachineService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/machines/{machineID}/check-connection", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.CheckMachineConnectionHandler(checkMachineConnectionService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/networks", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.CreateNetworkHandler(createNetworkService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/networks", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.ListNetworksHandler(listNetworksService)))
@@ -629,6 +640,8 @@ func main() {
 	mux.HandleFunc("GET /api/v1/orgs/{id}/compose-files/{composeFileID}/variables", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.ListVariablesHandler(listFleetVariablesService)))
 	mux.HandleFunc("PUT /api/v1/orgs/{id}/compose-files/{composeFileID}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.UpdateVariableHandler(updateFleetVariableService)))
 	mux.HandleFunc("DELETE /api/v1/orgs/{id}/compose-files/{composeFileID}/variables/{variableID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.DeleteVariableHandler(deleteFleetVariableService)))
+	mux.HandleFunc("POST /api/v1/orgs/{id}/compose-files/{composeFileID}/variables/secret", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.CreateSecretVariableHandler(createSecretVariableService)))
+	mux.HandleFunc("GET /api/v1/orgs/{id}/compose-files/{composeFileID}/variables/{variableID}/reveal", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.RevealVariableHandler(revealVariableService)))
 	mux.HandleFunc("POST /api/v1/orgs/{id}/operations", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, idempotency.Middleware(idempotencyStore, fleethttp.TriggerOperationHandler(triggerOperationService))))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/operations", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.ListOperationsHandler(listOperationsService)))
 	mux.HandleFunc("GET /api/v1/orgs/{id}/operations/{operationID}", httpserver.RequireAuth(cfg.JWTSigningKey, apiKeyResolver, fleethttp.GetOperationHandler(getOperationService)))

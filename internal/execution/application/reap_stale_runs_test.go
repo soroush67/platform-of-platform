@@ -59,7 +59,7 @@ func TestStaleRunReaper_ReclaimsAbandonedRun(t *testing.T) {
 	projectID := uuid.NewString()
 	mustExecReaper(t, root, `INSERT INTO projects (id, organization_id, name, slug) VALUES ($1, $2, 'reaper-test-project', 'reaper-test-project')`, projectID, orgID)
 
-	ws, err := workspacedomain.NewWorkspace(orgID, projectID, nil, "reaper-test-ws", workspacedomain.ExecutionEngineCompose)
+	ws, err := workspacedomain.NewWorkspace(orgID, projectID, nil, "reaper-test-ws", workspacedomain.ExecutionEngineTerraform)
 	if err != nil {
 		t.Fatalf("NewWorkspace: %v", err)
 	}

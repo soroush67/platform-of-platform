@@ -20,7 +20,7 @@ func TestWorkspaceRepository_CreateAndGetByID(t *testing.T) {
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws, err := domain.NewWorkspace(orgID, projectID, nil, "my-workspace", domain.ExecutionEngineCompose)
+	ws, err := domain.NewWorkspace(orgID, projectID, nil, "my-workspace", domain.ExecutionEngineTerraform)
 	if err != nil {
 		t.Fatalf("NewWorkspace: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestWorkspaceRepository_CreateAndGetByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
-	if got.Name != "my-workspace" || got.ExecutionEngine != domain.ExecutionEngineCompose {
+	if got.Name != "my-workspace" || got.ExecutionEngine != domain.ExecutionEngineTerraform {
 		t.Errorf("expected fields to round-trip, got %+v", got)
 	}
 	if got.Locked {
@@ -48,7 +48,7 @@ func TestWorkspaceRepository_GetByID_WrongOrganizationReturnsNotFound(t *testing
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "my-workspace", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "my-workspace", domain.ExecutionEngineTerraform)
 	if err := repo.Create(ctx, ws); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestWorkspaceRepository_WorkspaceExistsAndExists(t *testing.T) {
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "exists-ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "exists-ws", domain.ExecutionEngineTerraform)
 	if err := repo.Create(ctx, ws); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestWorkspaceRepository_GetScope(t *testing.T) {
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "scope-ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "scope-ws", domain.ExecutionEngineTerraform)
 	if err := repo.Create(ctx, ws); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestWorkspaceRepository_TryLockAndUnlock(t *testing.T) {
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "lock-ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "lock-ws", domain.ExecutionEngineTerraform)
 	if err := repo.Create(ctx, ws); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestWorkspaceRepository_TryLock_ConcurrentRaceHasExactlyOneWinner(t *testin
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "race-ws", domain.ExecutionEngineCompose)
+	ws, _ := domain.NewWorkspace(orgID, projectID, nil, "race-ws", domain.ExecutionEngineTerraform)
 	if err := repo.Create(ctx, ws); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -263,8 +263,8 @@ func TestWorkspaceRepository_ListByProject(t *testing.T) {
 	repo := postgres.NewWorkspaceRepository(pool)
 	orgID, projectID := insertOrgAndProject(t, root)
 
-	ws1, _ := domain.NewWorkspace(orgID, projectID, nil, "ws-one", domain.ExecutionEngineCompose)
-	ws2, _ := domain.NewWorkspace(orgID, projectID, nil, "ws-two", domain.ExecutionEngineCompose)
+	ws1, _ := domain.NewWorkspace(orgID, projectID, nil, "ws-one", domain.ExecutionEngineTerraform)
+	ws2, _ := domain.NewWorkspace(orgID, projectID, nil, "ws-two", domain.ExecutionEngineTerraform)
 	if err := repo.Create(ctx, ws1); err != nil {
 		t.Fatalf("Create ws1: %v", err)
 	}

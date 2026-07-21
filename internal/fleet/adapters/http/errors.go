@@ -32,6 +32,10 @@ func writeFleetError(w http.ResponseWriter, err error, notFoundTitle string) {
 		httpserver.WriteProblem(w, http.StatusConflict, "machine has operation history and cannot be hard-deleted", "")
 	case errors.Is(err, domain.ErrComposeFileHasHistory):
 		httpserver.WriteProblem(w, http.StatusConflict, "compose file has operation history and cannot be deleted", "")
+	case errors.Is(err, domain.ErrMachineNameTaken):
+		httpserver.WriteProblem(w, http.StatusConflict, "a machine with this name already exists in this organization", "")
+	case errors.Is(err, domain.ErrVariableKeyTaken):
+		httpserver.WriteProblem(w, http.StatusConflict, "a variable with this key already exists on this compose file", "")
 	default:
 		var validationErr *domain.ValidationError
 		if errors.As(err, &validationErr) {

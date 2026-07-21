@@ -9,6 +9,7 @@ import {
   useComposeFileNetworks,
   useComposeFileProjects,
   useComposeFileVolumes,
+  useCreateFleetSecretVariable,
   useCreateFleetVariable,
   useDeleteFleetVariable,
   useDetachNetwork,
@@ -19,11 +20,13 @@ import {
   useFleetVolumes,
   useMachines,
   useOperations,
+  useRevealFleetVariable,
   useTriggerOperation,
   useUpdateComposeFileContent,
 } from "../api/hooks/useFleet";
+import { useSecretMounts } from "../api/hooks/useSecrets";
 import { useProjects } from "../api/hooks/useTenancy";
-import { DESTRUCTIVE_OPERATION_TYPES, OPERATION_TYPES, VAR_TYPES, type VarType } from "../api/types";
+import { ApiError, DESTRUCTIVE_OPERATION_TYPES, OPERATION_TYPES, VAR_TYPES, type VarType } from "../api/types";
 
 function operationStatusBadgeClass(status: string): string {
   if (status === "success") return "badge-success";
@@ -54,7 +57,11 @@ export function ComposeFileDetailPage() {
 
   const { data: variables } = useFleetVariables(orgId, composeFileId);
   const createVariable = useCreateFleetVariable(orgId, composeFileId);
+  const createSecretVariable = useCreateFleetSecretVariable(orgId, composeFileId);
   const deleteVariable = useDeleteFleetVariable(orgId, composeFileId);
+  const revealVariable = useRevealFleetVariable(orgId, composeFileId);
+  const { data: secretMounts } = useSecretMounts(orgId);
+  const [revealedValues, setRevealedValues] = useState<Record<string, string>>({});
 
   const { data: machines } = useMachines(orgId);
   const { data: operations } = useOperations(orgId, composeFileId);
@@ -75,7 +82,6 @@ export function ComposeFileDetailPage() {
   const [varType, setVarType] = useState<VarType>("kv");
   const [varValue, setVarValue] = useState("");
   const [varSecretMountId, setVarSecretMountId] = useState("");
-  const [varSecretPath, setVarSecretPath] = useState("");
   const [varFileTargetPath, setVarFileTargetPath] = useState("");
   const [varError, setVarError] = useState<string | null>(null);
 
@@ -103,21 +109,22 @@ export function ComposeFileDetailPage() {
     e.preventDefault();
     setVarError(null);
     try {
-      await createVariable.mutateAsync({
-        key: varKey,
-        var_type: varType,
-        value: varType === "secret" ? undefined : varValue,
-        secret_mount_id: varType === "secret" ? varSecretMountId : undefined,
-        secret_path: varType === "secret" ? varSecretPath : undefined,
-        file_target_path: varType === "file_template" || varType === "config_file" ? varFileTargetPath : undefined,
-      });
+      if (varType === "secret") {
+        await createSecretVariable.mutateAsync({ key: varKey, mount_id: varSecretMountId, value: varValue });
+      } else {
+        await createVariable.mutateAsync({
+          key: varKey,
+          var_type: varType,
+          value: varValue,
+          file_target_path: varType === "file_template" || varType === "config_file" ? varFileTargetPath : undefined,
+        });
+      }
       setVarKey("");
       setVarValue("");
       setVarSecretMountId("");
-      setVarSecretPath("");
       setVarFileTargetPath("");
-    } catch {
-      setVarError("Failed to create variable.");
+    } catch (err) {
+      setVarError(err instanceof ApiError ? err.detail || err.message : "Failed to create variable.");
     }
   }
 
@@ -301,7 +308,26 @@ export function ComposeFileDetailPage() {
               <td className="mono">{v.key}</td>
               <td>{v.var_type}</td>
               <td className="mono">
-                {v.secret_ref ? `vault: ${v.secret_ref.mount_id}/${v.secret_ref.path}` : v.value}
+                {v.secret_ref ? (
+                  <span className="copy-value">
+                    <span className="mono muted">
+                      vault: {v.secret_ref.mount_id}/{v.secret_ref.path}
+                    </span>{" "}
+                    <button
+                      className="secondary"
+                      disabled={revealVariable.isPending}
+                      onClick={async () => {
+                        const res = await revealVariable.mutateAsync(v.id);
+                        setRevealedValues((prev) => ({ ...prev, [v.id]: res.value }));
+                      }}
+                    >
+                      Reveal
+                    </button>
+                    {revealedValues[v.id] !== undefined && <span className="mono"> {revealedValues[v.id]}</span>}
+                  </span>
+                ) : (
+                  v.value
+                )}
               </td>
               <td className="mono">{v.file_target_path || "—"}</td>
               <td>
@@ -343,12 +369,19 @@ export function ComposeFileDetailPage() {
           {varType === "secret" ? (
             <div className="field-row">
               <label>
-                Secret mount ID
-                <input value={varSecretMountId} onChange={(e) => setVarSecretMountId(e.target.value)} required />
+                Secret mount
+                <select value={varSecretMountId} onChange={(e) => setVarSecretMountId(e.target.value)} required>
+                  <option value="">— select mount —</option>
+                  {secretMounts?.data.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
-                Path
-                <input value={varSecretPath} onChange={(e) => setVarSecretPath(e.target.value)} required />
+                Value
+                <input value={varValue} onChange={(e) => setVarValue(e.target.value)} required />
               </label>
             </div>
           ) : (
